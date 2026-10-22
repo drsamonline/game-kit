@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Games built with game-kit</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--ink:#e7e9ee;--mut:#9aa3b2;--line:#252a34;--acc:#22c55e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header,main,footer{max-width:900px;margin:0 auto;padding:24px 20px}
+  h1{margin:0 0 4px;font-size:24px}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:28px 0 8px}
+  .mut{color:var(--mut)}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+  .gcard{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;text-decoration:none;color:inherit}
+  .gcard:hover{border-color:var(--acc)}
+  .gcard h3{margin:0 0 4px;font-size:15px;color:#7dd3fc}
+  .gcard p{margin:0 0 8px;color:var(--mut);font-size:13px}
+  .go{color:var(--acc);font-weight:600;font-size:13px}
+  a.btn{display:inline-block;background:var(--acc);color:#06210f;text-decoration:none;font-weight:600;border-radius:10px;padding:10px 14px;margin:4px 4px 0 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Games built with game-kit</h1>
+  <p class="mut">Every game in the family, on one page. The engines game-kit was extracted from are listed below them.</p>
+  <p><a class="btn" href="../">game-kit</a> <a class="btn" href="https://github.com/drsamonline/game-kit">Source</a></p>
+</header>
+<main>
+  <h2>Games</h2>
+  <div class="grid"><a class="gcard" href="https://drsamonline.github.io/neon-games/"><h3>neon-games</h3><p>Two free open-world browser games on the Neon Engine — Dead Zone (zombie survival) and Neon Police. Playable in the browser, no install. CC BY-NC-SA 4.0.</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/neon-runner/"><h3>neon-runner</h3><p>Retro auto-fire side-scrolling shooter. Move, jump, duck — your gun fires itself. One self-contained HTML file, zero dependencies, fully offline.</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/retro-strike/"><h3>retro-strike</h3><p>🎮 A complete retro 3rd-person shooter in a single HTML file — custom software 3D renderer, chiptune audio, zero dependencies.</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/idle-city-ages-of-growth/"><h3>idle-city-ages-of-growth</h3><p>A single-file idle city-builder that grows from a Stone Age village into a Fusion Age world-city. Zero dependencies, fully offline, mobile-ready. By Dr. Sohil Momin. Source-availab</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/dance-fight/"><h3>dance-fight</h3><p>A browser dance-fighting game where every fight move is a dance move. Load your own track and the character dances to its actual beat grid. Single HTML file, no dependencies, no bu</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/aethelgard-games/"><h3>aethelgard-games</h3><p>Two free browser games by Dr. Sohil Momin — Aethelgard: The Books (visual novel) and Aethelgard: Chronicles of Fate (RPG). Playable on GitHub Pages.</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/AethelgardVN/"><h3>AethelgardVN</h3><p>Visual Novel based on Aethelgard: Chronicles of Fate RPG with Base Engine</p><span class="go">Play &rarr;</span></a></div>
+  <h2>Engines</h2>
+  <div class="grid"><a class="gcard" href="https://drsamonline.github.io/neon-engine/"><h3>neon-engine</h3><p>A code-only open-world game engine for the browser. No assets, no build step, no dependencies — every texture, mesh and sound is generated at runtime. MIT licensed.</p><span class="go">Play &rarr;</span></a><a class="gcard" href="https://drsamonline.github.io/Aethelgard-Engine/"><h3>Aethelgard-Engine</h3><p>Aethelgard-Engine base Engine for Aethlgard RPG Game</p><span class="go">Play &rarr;</span></a></div>
+</main>
+<footer class="mut">&copy; 2026 Dr Sohil Momin &middot; game-kit &middot; Part of the Forge system</footer>
+</body>
+</html>

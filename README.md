@@ -48,6 +48,17 @@ node test-node.js
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
 save/load, and every maths helper — all headless, no browser.
 
+## Games built with game-kit
+
+Every game in the family is collected in one gallery: [`games/`](games/).
+
+- **Games:** neon-games, neon-runner, retro-strike, idle-city-ages-of-growth,
+  dance-fight, aethelgard-games, AethelgardVN
+- **Engines** game-kit was extracted from: neon-engine, Aethelgard-Engine
+
+The data behind the gallery is [`games.json`](games.json) — add a game by adding
+an entry there.
+
 ## Licence
 
 MIT. (c) 2026 Dr Sohil Momin. Part of the Forge system — kits open, orchestrator licensed.

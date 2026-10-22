@@ -1,0 +1,71 @@
+{
+  "generated": "2026-10-22",
+  "note": "Every game built on game-kit, plus the engines it was extracted from.",
+  "games": [
+    {
+      "name": "neon-games",
+      "kind": "game",
+      "description": "Two free open-world browser games on the Neon Engine \u2014 Dead Zone (zombie survival) and Neon Police. Playable in the browser, no install. CC BY-NC-SA 4.0.",
+      "url": "https://drsamonline.github.io/neon-games/",
+      "source": "https://github.com/drsamonline/neon-games"
+    },
+    {
+      "name": "neon-runner",
+      "kind": "game",
+      "description": "Retro auto-fire side-scrolling shooter. Move, jump, duck \u2014 your gun fires itself. One self-contained HTML file, zero dependencies, fully offline.",
+      "url": "https://drsamonline.github.io/neon-runner/",
+      "source": "https://github.com/drsamonline/neon-runner"
+    },
+    {
+      "name": "retro-strike",
+      "kind": "game",
+      "description": "\ud83c\udfae A complete retro 3rd-person shooter in a single HTML file \u2014 custom software 3D renderer, chiptune audio, zero dependencies.",
+      "url": "https://drsamonline.github.io/retro-strike/",
+      "source": "https://github.com/drsamonline/retro-strike"
+    },
+    {
+      "name": "idle-city-ages-of-growth",
+      "kind": "game",
+      "description": "A single-file idle city-builder that grows from a Stone Age village into a Fusion Age world-city. Zero dependencies, fully offline, mobile-ready. By Dr. Sohil Momin. Source-available: free for non-commercial use with attribution; commercial use requires a licence.",
+      "url": "https://drsamonline.github.io/idle-city-ages-of-growth/",
+      "source": "https://github.com/drsamonline/idle-city-ages-of-growth"
+    },
+    {
+      "name": "dance-fight",
+      "kind": "game",
+      "description": "A browser dance-fighting game where every fight move is a dance move. Load your own track and the character dances to its actual beat grid. Single HTML file, no dependencies, no build step.",
+      "url": "https://drsamonline.github.io/dance-fight/",
+      "source": "https://github.com/drsamonline/dance-fight"
+    },
+    {
+      "name": "aethelgard-games",
+      "kind": "game",
+      "description": "Two free browser games by Dr. Sohil Momin \u2014 Aethelgard: The Books (visual novel) and Aethelgard: Chronicles of Fate (RPG). Playable on GitHub Pages.",
+      "url": "https://drsamonline.github.io/aethelgard-games/",
+      "source": "https://github.com/drsamonline/aethelgard-games"
+    },
+    {
+      "name": "AethelgardVN",
+      "kind": "game",
+      "description": "Visual Novel based on Aethelgard: Chronicles of Fate RPG with Base Engine",
+      "url": "https://drsamonline.github.io/AethelgardVN/",
+      "source": "https://github.com/drsamonline/AethelgardVN"
+    }
+  ],
+  "engines": [
+    {
+      "name": "neon-engine",
+      "kind": "engine",
+      "description": "A code-only open-world game engine for the browser. No assets, no build step, no dependencies \u2014 every texture, mesh and sound is generated at runtime. MIT licensed.",
+      "url": "https://drsamonline.github.io/neon-engine/",
+      "source": "https://github.com/drsamonline/neon-engine"
+    },
+    {
+      "name": "Aethelgard-Engine",
+      "kind": "engine",
+      "description": "Aethelgard-Engine base Engine for Aethlgard RPG Game",
+      "url": "https://drsamonline.github.io/Aethelgard-Engine/",
+      "source": "https://github.com/drsamonline/Aethelgard-Engine"
+    }
+  ]
+}
