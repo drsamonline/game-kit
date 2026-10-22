@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>game-kit — dodge demo</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--ink:#e7e9ee;--mut:#9aa3b2;--line:#252a34;--acc:#22c55e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header,main,footer{max-width:640px;margin:0 auto;padding:18px}
+  canvas{width:100%;background:#0b0e12;border:1px solid var(--line);border-radius:12px;touch-action:none}
+  .mut{color:var(--mut)}
+  button{background:var(--acc);color:#06210f;border:0;border-radius:10px;padding:9px 13px;font-weight:600;cursor:pointer;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>game-kit — dodge demo</h1>
+  <p class="mut">Move with ← → (or A/D). Dodge the falling blocks. Best score is saved.</p>
+</header>
+<main>
+  <canvas id="c" width="600" height="360"></canvas>
+  <p class="mut" id="hud"></p>
+  <button id="restart">Restart</button>
+</main>
+<footer class="mut">© 2026 Dr Sohil Momin · game-kit</footer>
+<script src="../game-kit.js"></script>
+<script>
+  var c = document.getElementById("c"), ctx = c.getContext("2d");
+  var hud = document.getElementById("hud");
+  var save = Game.save(localStorage, "game-kit-demo");
+  var best = (save.read({ best: 0 }) || {}).best || 0;
+  var input = Game.input(window);
+
+  var player, blocks, score, spawn, over;
+  function reset() {
+    player = { x: 280, y: 320, w: 40, h: 16, speed: 320 };
+    blocks = []; score = 0; spawn = 0; over = false;
+  }
+  reset();
+
+  var loop = Game.loop({
+    step: 1 / 60,
+    update: function (dt) {
+      if (over) return;
+      if (input.isDown("ArrowLeft") || input.isDown("a")) player.x -= player.speed * dt;
+      if (input.isDown("ArrowRight") || input.isDown("d")) player.x += player.speed * dt;
+      player.x = Game.clamp(player.x, 0, c.width - player.w);
+
+      spawn -= dt;
+      if (spawn <= 0) {
+        var w = Game.randInt(24, 60);
+        blocks.push({ x: Game.rand(0, c.width - w), y: -20, w: w, h: 18, vy: Game.rand(90, 190) + score * 4 });
+        spawn = Math.max(0.25, 0.9 - score * 0.02);
+      }
+      for (var i = blocks.length - 1; i >= 0; i--) {
+        var b = blocks[i];
+        b.y += b.vy * dt;
+        if (Game.aabb(b, player)) { over = true; if (score > best) { best = score; save.write({ best: best }); } }
+        if (b.y > c.height) { blocks.splice(i, 1); score++; }
+      }
+      input.endFrame();
+    },
+    render: function () {
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.fillStyle = "#22c55e";
+      ctx.fillRect(player.x, player.y, player.w, player.h);
+      ctx.fillStyle = "#ef4444";
+      blocks.forEach(function (b) { ctx.fillRect(b.x, b.y, b.w, b.h); });
+      hud.textContent = "Score " + score + " · Best " + best + (over ? " · GAME OVER (press Restart)" : "");
+    }
+  });
+  loop.start();
+
+  document.getElementById("restart").onclick = function () { reset(); };
+</script>
+</body>
+</html>
