@@ -1,6 +1,7 @@
 # game-kit
 
 [![live](https://img.shields.io/badge/live-online-22c55e)](https://drsamonline.github.io/game-kit/)
+[![test](https://github.com/drsamonline/game-kit/actions/workflows/test.yml/badge.svg)](https://github.com/drsamonline/game-kit/actions/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **The shared game core for drsamonline apps.** Zero dependencies. The common
