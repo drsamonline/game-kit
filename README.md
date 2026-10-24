@@ -9,8 +9,13 @@ engine every small browser game was re-implementing, extracted once from
 `neon-engine` and `Aethelgard-Engine`.
 
 - a **fixed-timestep loop** (deterministic, testable, no spiral-of-death);
+- an **entity-component system** *(v2)* — an entity is an id plus a bag of components, and behaviour lives in systems that run in order over the entities holding the components they name;
+- a **state machine** *(v2)* — named states with allowed transitions (`boot → menu → play → pause → game-over → again`), refusing a transition the table does not allow;
+- a **seeded RNG** *(v2)* — reproducible levels and spawns from a seed;
+- **collision primitives** *(v2)* — AABB, circle, circle-vs-box;
+- a **minimal 2-D physics step** *(v2)* — separate + restitution + friction for AABBs;
 - an **input** manager (keyboard);
-- a tiny **scene / state machine**;
+- a tiny **scene** helper;
 - **save / load** (bring your own storage — `web-kit` fits);
 - **maths helpers** (`clamp`, `lerp`, `dist`, `aabb`, `rand`).
 
@@ -31,6 +36,21 @@ input.endFrame();
 const scenes = Game.Scenes().add("menu", menu).add("play", play).go("menu");
 const save = Game.save(localStorage, "save");   // or Loom.storage from web-kit
 save.write({ level: 3 });
+
+// v2: an ECS world steps headless — the sim has no canvas
+const world = Game.ECS();
+const e = world.create({ pos: { x: 0 }, vel: { x: 2 } });
+world.system(["pos", "vel"], (id, ent, dt) => { ent.pos.x += ent.vel.x * dt; })
+     .system(["pos"], (id, ent) => draw(ent.pos));
+world.update(1 / 60);
+
+// v2: a seeded level, and a state machine with allowed transitions
+const rng = Game.rng(1234);
+const machine = Game.Machine({ initial: "boot", transitions: { boot: { start: "menu" }, menu: { play: "play" } } });
+machine.send("start");            // -> "menu"; an event not in the table is refused
+
+// v2: separate, bounce and damp
+Game.resolve(player, platform, { restitution: 0.4, friction: 0.1 });
 ```
 
 ## Why a fixed timestep
@@ -39,15 +59,29 @@ Physics and game logic must advance in equal steps or behaviour changes with fra
 rate. The loop accumulates real time and runs whole `step`s, and **clamps a huge
 frame** so a backgrounded tab does not spiral into thousands of updates.
 
+## v2 — what's new
+
+The kit absorbed the engine patterns every small browser game rebuilds:
+
+- **ECS** — the game architecture pattern, so a game can be composed rather than subclassed, and the sim can be tested on its own.
+- **A seeded RNG** — a level is reproducible from a seed (`Game.rng(seed)`); use it instead of `Math.random` anywhere determinism matters.
+- **A state machine** — named states and *allowed* transitions, so `boot → menu → play → pause → game-over → again` is explicit and an illegal jump is refused.
+- **Collision primitives** — AABB (already there), plus circle and circle-vs-box.
+- **A minimal 2-D physics step** — `Game.resolve(a, b, {restitution, friction})` separates two boxes along the axis of least penetration and bounces them.
+
+Every addition is reimplemented from the idea, not copied.
+
 ## Verified
 
 ```
 node test-node.js
-14 passed, 0 failed
+38 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
-save/load, and every maths helper — all headless, no browser.
+save/load, every maths helper, and the v2 surface: RNG reproducibility, ECS
+(component filtering and **update order**), the state machine, a collision case
+per primitive, and a physics resolution case — all headless, no browser.
 
 ## Games built with game-kit
 
