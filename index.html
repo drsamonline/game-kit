@@ -114,5 +114,63 @@ window.__exportAll = function () {
   else add();
 })();
 </script>
+
+<script>
+/* PUT IT BACK.
+   The export writes the raw store as JSON; without this, that file could never be restored -
+   and a backup you cannot restore is not a backup. This reads the file back, shows you what
+   is in it BEFORE it writes anything, and asks before replacing.
+   Press the button, or open the page with ?import. */
+window.__importAll = function () {
+  var inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".json,application/json";
+  inp.onchange = function () {
+    var f = inp.files && inp.files[0];
+    if (!f) return;
+    var r = new FileReader();
+    r.onload = function () {
+      var data;
+      try { data = JSON.parse(String(r.result)); }
+      catch (e) { alert("That is not a JSON backup."); return; }
+      var store = data && (data.storage || data.localStorage || data);
+      if (!store || typeof store !== "object") { alert("No stored data found in that file."); return; }
+      var keys = Object.keys(store);
+      if (!keys.length) { alert("That backup is empty."); return; }
+      var preview = keys.slice(0, 8).map(function (k) { return "  " + k; }).join("\n");
+      var ok = confirm("This backup contains " + keys.length + " item(s):\n\n" + preview
+        + (keys.length > 8 ? "\n  ..." : "")
+        + "\n\nRESTORE THEM? This replaces what this app has stored now.");
+      if (!ok) return;
+      var n = 0;
+      keys.forEach(function (k) {
+        var v = store[k];
+        localStorage.setItem(k, typeof v === "string" ? v : JSON.stringify(v));
+        n++;
+      });
+      alert("Restored " + n + " item(s). Reloading.");
+      location.reload();
+    };
+    r.readAsText(f);
+  };
+  inp.click();
+};
+(function () {
+  if (location.search.indexOf("import") >= 0) { setTimeout(window.__importAll, 300); return; }
+  function add() {
+    if (!document.body || document.getElementById("__importLink")) return;
+    var b = document.createElement("button");
+    b.id = "__importLink";
+    b.textContent = "Restore from backup";
+    b.title = "Load a JSON backup made by this app and restore it";
+    b.style.cssText = "position:fixed;left:130px;bottom:10px;z-index:9998;background:#111;color:#eee;border:1px solid #444;border-radius:8px;padding:6px 10px;font:12px system-ui;cursor:pointer;opacity:.75";
+    b.onmouseenter = function () { b.style.opacity = "1"; };
+    b.onmouseleave = function () { b.style.opacity = ".75"; };
+    b.onclick = window.__importAll;
+    document.body.appendChild(b);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add);
+  else add();
+})();
+</script>
 </body>
 </html>
