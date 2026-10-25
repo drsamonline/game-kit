@@ -231,5 +231,64 @@ window.__importAll = function () {
   else add();
 })();
 </script>
+
+<style>
+/* A FOCUS RING, because a keyboard you cannot see is not access. Most of these apps
+   removed the default outline and never replaced it. */
+:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+</style>
+<script>
+/* KEYBOARD ACCESS — hooked at document, like the undo is hooked at the store.
+   /  focus search      ?  shortcuts      Esc  leave a field
+   It NEVER steals a key while a field has focus: a shortcut that eats your typing is a
+   bug that looks like a feature. */
+(function () {
+  function typing(e) {
+    var t = e.target || {};
+    return /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable === true;
+  }
+  function searchField() {
+    return document.querySelector(
+      'input[type="search"], input[placeholder*="search" i], input[id*="search" i],' +
+      ' input[name*="search" i], input[placeholder*="filter" i], input[type="text"]');
+  }
+  function say(m) {
+    var d = document.createElement("div");
+    d.textContent = m;
+    d.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);bottom:86px;background:#111;color:#eee;border:1px solid #444;border-radius:8px;padding:8px 14px;font:13px system-ui;z-index:10000";
+    document.body.appendChild(d);
+    setTimeout(function () { d.remove(); }, 1600);
+  }
+  function overlay() {
+    var old = document.getElementById("__keysHelp");
+    if (old) { old.remove(); return; }
+    var box = document.createElement("div");
+    box.id = "__keysHelp";
+    box.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:10001;display:flex;align-items:center;justify-content:center;font:14px system-ui;color:#eee";
+    box.innerHTML = '<div style="background:#15181f;border:1px solid #333;border-radius:12px;padding:20px 24px;max-width:340px">'
+      + '<div style="font-weight:700;margin-bottom:10px">Keyboard</div>'
+      + '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px">'
+      + '<kbd style="background:#222;border-radius:4px;padding:1px 6px">/</kbd><span>focus search</span>'
+      + '<kbd style="background:#222;border-radius:4px;padding:1px 6px">?</kbd><span>this list</span>'
+      + '<kbd style="background:#222;border-radius:4px;padding:1px 6px">Esc</kbd><span>leave a field</span>'
+      + '<kbd style="background:#222;border-radius:4px;padding:1px 6px">Ctrl Z</kbd><span>undo the last change</span>'
+      + '</div><div style="margin-top:12px;opacity:.6;font-size:12px">press ? or click to close</div></div>';
+    box.onclick = function () { box.remove(); };
+    document.body.appendChild(box);
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "Escape") { if (typing(e)) { e.target.blur(); } var b = document.getElementById("__keysHelp"); if (b) b.remove(); return; }
+    if (typing(e)) return;                       // never steal a key from a field
+    if (e.key === "/") {
+      var s = searchField();
+      if (s) { e.preventDefault(); s.focus(); if (s.select) s.select(); say("Search — Esc to leave"); }
+      return;
+    }
+    if (e.key === "?") { e.preventDefault(); overlay(); }
+  });
+  window.__keyboardHelp = overlay;
+})();
+</script>
 </body>
 </html>
