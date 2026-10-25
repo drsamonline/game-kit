@@ -172,5 +172,64 @@ window.__importAll = function () {
   else add();
 })();
 </script>
+
+<script>
+/* UNDO — at the level every app already shares: the STORE ITSELF.
+   Apps save with localStorage.setItem. This wraps that ONE function, remembers the previous
+   value of whatever it touches, and puts it back on Ctrl+Z or the button.
+   WHY HERE: a per-app undo needs the app to funnel its writes through one function, and where
+   it does not, the undo would quietly do nothing - which is the failure this estate keeps
+   producing. Hooking the store cannot silently do nothing: if the app saves, this sees it. */
+(function () {
+  var history = [], orig = localStorage.setItem.bind(localStorage), LIMIT = 60;
+  localStorage.setItem = function (k, v) {
+    try {
+      var prev = localStorage.getItem(k);
+      if (prev !== String(v) && String(k).indexOf("__") !== 0) {
+        history.push({ k: k, prev: prev });
+        if (history.length > LIMIT) history.shift();
+      }
+    } catch (e) {}
+    return orig(k, v);
+  };
+  function say(m) {
+    var d = document.createElement("div");
+    d.textContent = m;
+    d.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);bottom:52px;background:#111;color:#eee;border:1px solid #444;border-radius:8px;padding:8px 14px;font:13px system-ui;z-index:10000";
+    document.body.appendChild(d);
+    setTimeout(function () { d.remove(); }, 1800);
+  }
+  window.__undo = function () {
+    var h = history.pop();
+    if (!h) { say("Nothing to undo"); return false; }
+    try {
+      if (h.prev === null) localStorage.removeItem(h.k);
+      else orig(h.k, h.prev);
+    } catch (e) { say("Could not undo"); return false; }
+    say("Undone. Reloading.");
+    setTimeout(function () { location.reload(); }, 350);
+    return true;
+  };
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "z") {
+      var t = e.target || {};
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;   // let the field undo its own text
+      e.preventDefault(); window.__undo();
+    }
+  });
+  function add() {
+    if (!document.body || document.getElementById("__undoBtn")) return;
+    var b = document.createElement("button");
+    b.id = "__undoBtn"; b.textContent = "Undo"; b.title = "Undo the last change (Ctrl+Z)";
+    b.style.cssText = "position:fixed;left:10px;bottom:44px;z-index:9998;background:#111;color:#eee;border:1px solid #444;border-radius:8px;padding:6px 10px;font:12px system-ui;cursor:pointer;opacity:.75";
+    b.onmouseenter = function () { b.style.opacity = "1"; };
+    b.onmouseleave = function () { b.style.opacity = ".75"; };
+    b.onclick = window.__undo;
+    document.body.appendChild(b);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add);
+  else add();
+})();
+</script>
 </body>
 </html>
