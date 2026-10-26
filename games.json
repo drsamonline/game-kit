@@ -56,7 +56,7 @@
     {
       "name": "neon-engine",
       "kind": "engine",
-      "description": "A code-only open-world game engine for the browser. No assets, no build step, no dependencies \u2014 every texture, mesh and sound is generated at runtime. MIT licensed.",
+      "description": "A code-only open-world game engine for the browser. No assets, no build step, no dependencies \u2014 every texture, mesh and sound is generated at runtime. PolyForm Noncommercial licensed.",
       "url": "https://drsamonline.github.io/neon-engine/",
       "source": "https://github.com/drsamonline/neon-engine"
     },
