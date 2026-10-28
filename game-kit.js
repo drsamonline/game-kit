@@ -4,7 +4,7 @@
  * fixed-timestep loop, an input manager, a tiny scene/state machine, save/load,
  * and maths helpers. Renders with plain canvas; no framework.
  *
- * MIT License. (c) 2026 Dr Sohil Momin.
+ * PolyForm Noncommercial 1.0.0. (c) 2026 Dr Sohil Momin.
  */
 (function (root) {
   "use strict";
