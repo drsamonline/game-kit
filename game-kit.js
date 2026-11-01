@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "0.2.0" };
+  var G = { version: "1.1.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -41,9 +41,19 @@
     }
     function frame(t) {
       if (!running) return;
-      var dt = last ? (t - last) / 1000 : 0; last = t;
-      tick(dt);
+      /* Book the next frame BEFORE doing any work. If the body throws and the
+         guard below is itself somehow broken, the game still gets another
+         frame instead of freezing on its last image — which is exactly how
+         Eon Commando shipped a permanent freeze for two releases. */
       raf = root.requestAnimationFrame ? root.requestAnimationFrame(frame) : null;
+      var dt = last ? (t - last) / 1000 : 0; last = t;
+      try {
+        tick(dt);
+      } catch (err) {
+        acc = 0;
+        if (opts.onError) { try { opts.onError(err); } catch (e) {} }
+        else if (root.console) { try { console.error("[game-kit] frame error:", err); } catch (e) {} }
+      }
     }
     return {
       tick: tick,
@@ -208,6 +218,183 @@
     if ((a.vy || 0) * sy < 0) a.vy = -rest * (a.vy || 0);
     a.vx = (a.vx || 0) * (1 - fric);
     return { axis: "y", penetration: oy };
+  };
+
+
+  /* =========================================================================
+     G.text — layout that measures instead of assuming.
+
+     Every layout bug in Eon Commando came from the same mistake: wrapping by
+     character count. "26 characters" is only correct for one font at one size
+     in one panel width; change any of the three and the line runs past the box.
+     Measure the string, then break it.
+     ========================================================================= */
+  G.text = {
+    /* wrap a string to a pixel width.
+       measure(str) must return the rendered width in pixels. */
+    wrap: function (str, maxPx, measure) {
+      var words = String(str == null ? "" : str).split(/\s+/);
+      var lines = [], cur = "";
+      for (var i = 0; i < words.length; i++) {
+        if (!words[i]) continue;
+        var t = cur ? cur + " " + words[i] : words[i];
+        if (measure(t) > maxPx && cur) { lines.push(cur); cur = words[i]; }
+        else cur = t;
+      }
+      if (cur) lines.push(cur);
+      /* a single word wider than the column: split it rather than overflow */
+      for (var j = 0; j < lines.length; j++) {
+        if (measure(lines[j]) <= maxPx) continue;
+        var parts = [], buf = "";
+        for (var k = 0; k < lines[j].length; k++) {
+          var next = buf + lines[j][k];
+          if (measure(next) > maxPx && buf) { parts.push(buf); buf = lines[j][k]; }
+          else buf = next;
+        }
+        if (buf) parts.push(buf);
+        lines.splice.apply(lines, [j, 1].concat(parts));
+        j += parts.length - 1;
+      }
+      return lines;
+    },
+
+    /* the largest integer scale in [min, max] at which str fits maxPx */
+    fitScale: function (str, maxPx, measure, max, min) {
+      max = max || 4; min = min || 1;
+      for (var sc = max; sc > min; sc--) { if (measure(str, sc) <= maxPx) return sc; }
+      return min;
+    },
+
+    /* how many lines of `lineH` fit in `height`, at least 1 */
+    linesThatFit: function (height, lineH) {
+      return Math.max(1, Math.floor(height / lineH));
+    },
+
+    /* Glyph coverage. A bitmap font silently renders a missing character as a
+       box or a question mark — Eon drew "?2" for weeks because U+00D7 was not
+       in its 5x7 set. Pass the set of characters your font can draw. */
+    missing: function (strings, charset) {
+      var have = {}, out = [];
+      for (var i = 0; i < charset.length; i++) have[charset[i]] = true;
+      var seen = {};
+      for (var s = 0; s < strings.length; s++) {
+        var str = String(strings[s] || "");
+        for (var c = 0; c < str.length; c++) {
+          var ch = str[c];
+          if (have[ch] || seen[ch] || /\s/.test(ch)) continue;
+          seen[ch] = true;
+          out.push(ch);
+        }
+      }
+      return out;
+    }
+  };
+
+  /* =========================================================================
+     G.layout — percentage placement, so a control survives rotation, resize
+     and the mobile address bar collapsing. Pixel positions survive none of
+     those.
+     ========================================================================= */
+  G.layout = {
+    pct: function (px, total) { return total ? (px / total) * 100 : 0; },
+    px: function (pct, total) { return (pct / 100) * total; },
+    clampPct: function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); },
+
+    /* apply a saved {x, y, scale, opacity} (x/y in percent) to an element */
+    apply: function (el, box) {
+      if (!el || !box) return;
+      el.style.left = box.x + "%";
+      el.style.top = box.y + "%";
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+      el.style.transformOrigin = "top left";
+      el.style.transform = "scale(" + (box.scale == null ? 1 : box.scale) + ")";
+      if (box.opacity != null) el.style.opacity = box.opacity;
+    },
+
+    /* drag an element, reporting percentage positions as it moves.
+       onChange({x, y}) is called on every move and once on release. */
+    draggable: function (el, onChange, opts) {
+      opts = opts || {};
+      if (!el || !el.addEventListener) return function () {};
+      var drag = null;
+      function down(e) {
+        if (opts.enabled && !opts.enabled()) return;
+        var r = el.getBoundingClientRect();
+        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+        if (el.setPointerCapture && e.pointerId != null) el.setPointerCapture(e.pointerId);
+        if (e.preventDefault) e.preventDefault();
+      }
+      function move(e) {
+        if (!drag) return;
+        var vw = root.innerWidth || 1, vh = root.innerHeight || 1;
+        var x = G.layout.clampPct(((e.clientX - drag.dx) / vw) * 100, -6, 96);
+        var y = G.layout.clampPct(((e.clientY - drag.dy) / vh) * 100, 2, 96);
+        el.style.left = x + "%"; el.style.top = y + "%";
+        el.style.right = "auto"; el.style.bottom = "auto";
+        drag.x = x; drag.y = y;
+        if (onChange) onChange({ x: x, y: y, done: false });
+      }
+      function up() {
+        if (!drag) return;
+        var d = drag; drag = null;
+        if (onChange) onChange({ x: d.x, y: d.y, done: true });
+      }
+      el.addEventListener("pointerdown", down);
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+      el.addEventListener("pointercancel", up);
+      return function detach() {
+        el.removeEventListener("pointerdown", down);
+        el.removeEventListener("pointermove", move);
+        el.removeEventListener("pointerup", up);
+        el.removeEventListener("pointercancel", up);
+      };
+    }
+  };
+
+  /* =========================================================================
+     G.audit — test-time checks for the things a screenshot will not catch.
+
+     A viewport check cannot catch a box overflow: text can be perfectly on
+     screen while spilling out of its panel. Eon's first overflow audit passed
+     for that reason. These helpers assert against the box.
+     ========================================================================= */
+  G.audit = {
+    /* record every string drawn through `drawText` for one frame.
+       drawText(g, str, x, y, scale, align, widthFn) */
+    record: function (drawText, frameFn) {
+      var seen = [];
+      var wrapped = function (g, str, x, y, scale, align, widthFn) {
+        scale = scale || 1;
+        var w = widthFn ? widthFn(str, scale) : 0;
+        var left = align === "center" ? x - w / 2 : (align === "right" ? x - w : x);
+        seen.push({ str: String(str), x1: left, x2: left + w, y1: y, y2: y + 7 * scale });
+        return drawText.apply(null, arguments);
+      };
+      frameFn(wrapped);
+      return seen;
+    },
+
+    inside: function (rect, r, tol) {
+      tol = tol || 1.5;
+      return r.x1 >= rect.x - tol && r.x2 <= rect.x + rect.w + tol &&
+             r.y1 >= rect.y - tol && r.y2 <= rect.y + rect.h + tol;
+    },
+
+    /* every recorded string that falls outside `rect` */
+    overflow: function (records, rect, tol) {
+      var out = [];
+      for (var i = 0; i < records.length; i++) {
+        if (!G.audit.inside(rect, records[i], tol)) out.push(records[i]);
+      }
+      return out;
+    },
+
+    /* two rectangles must not overlap */
+    overlap: function (a, b) {
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
   };
 
   root.Game = G;

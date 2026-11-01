@@ -17,9 +17,35 @@ engine every small browser game was re-implementing, extracted once from
 - an **input** manager (keyboard);
 - a tiny **scene** helper;
 - **save / load** (bring your own storage — `web-kit` fits);
-- **maths helpers** (`clamp`, `lerp`, `dist`, `aabb`, `rand`).
+- **maths helpers** (`clamp`, `lerp`, `dist`, `aabb`, `rand`);
+- **text layout** *(v1.1)* — wrap by measured width, auto-fit headings, glyph-coverage checks;
+- **percentage layout** *(v1.1)* — position controls so they survive rotation and resize, with a
+  drag helper for building a pad editor;
+- **layout auditing** *(v1.1)* — assert text stays inside its box, which a viewport check cannot do.
+
+Every one of those exists because a shipped game got it wrong first. The stories are in
+[**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — ten rules, each tied to the bug that taught it.
 
 ## Use it
+
+```js
+// wrap to a pixel column, not a character count
+const lines = Game.text.wrap(str, columnWidth, s => ctx.measureText(s).width);
+
+// shrink a heading until it fits
+const scale = Game.text.fitScale(title, maxWidth, (s, sc) => measure(s) * sc, 5, 1);
+
+// did the font actually have every glyph?
+const missing = Game.text.missing(allUiStrings, FONT_CHARSET);
+
+// controls that survive rotation: store percentages, not pixels
+Game.layout.apply(el, { x: 2, y: 62, scale: 1.1, opacity: 0.7 });
+Game.layout.draggable(el, box => save(box));
+
+// in a test: does any string leave its panel?
+const recs = Game.audit.record(drawText, draw => draw(ctx));
+Game.audit.overflow(recs, panelRect);      // [] means clean
+```
 
 ```js
 const game = Game.loop({
