@@ -177,6 +177,175 @@ try {
   guardLoop.stop();
 }
 
+/* ---------- v1.2: the voxel layer ---------- */
+
+// chunked storage
+{
+  const w = G.VoxelWorld({ chunkSize: 16 });
+  ok("voxel: an empty world allocates no chunks", w.chunkCount() === 0);
+  ok("voxel: reading empty space is 0", w.get(0, 0, 0) === 0);
+  w.set(3, 4, 5, 7);
+  ok("voxel: set/get round-trips", w.get(3, 4, 5) === 7);
+  ok("voxel: one block allocates exactly one chunk", w.chunkCount() === 1);
+  w.set(3, 4, 5, 0);
+  ok("voxel: emptying a chunk drops it again", w.chunkCount() === 0);
+
+  // negative coordinates are the classic off-by-one: floor(-1/16) is -1, not 0
+  w.set(-1, -1, -1, 5);
+  ok("voxel: negative coordinates round-trip", w.get(-1, -1, -1) === 5);
+  ok("voxel: and do not alias their neighbours", w.get(0, 0, 0) === 0);
+  ok("voxel: a block far away lands in its own chunk", (w.set(100, 0, 0, 1), w.chunkCount() === 2));
+
+  // the chunk boundary itself: -1 and 15 are one block apart on the number line
+  // but in DIFFERENT chunks, and truncating the division instead of flooring it
+  // aliases them onto the same cell
+  const edge = G.VoxelWorld({ chunkSize: 16 });
+  edge.set(-1, 0, 0, 4);
+  edge.set(15, 0, 0, 8);
+  ok("voxel: -1 and 15 do not alias", edge.get(-1, 0, 0) === 4 && edge.get(15, 0, 0) === 8);
+  ok("voxel: they sit in two chunks", edge.chunkCount() === 2);
+}
+
+// greedy meshing
+{
+  const w = G.VoxelWorld({ chunkSize: 16 });
+  w.set(0, 0, 0, 1);
+  const one = w.mesh(0, 0, 0);
+  ok("mesh: a single block is 6 quads", one.count === 6, one.count + " quads");
+
+  const solid = G.VoxelWorld({ chunkSize: 16 });
+  solid.fill(0, 0, 0, 15, 15, 15, 1);
+  const m = solid.mesh(0, 0, 0);
+  ok("mesh: a solid 16^3 chunk is 6 quads, not 1536 faces", m.count === 6, m.count + " quads");
+  ok("mesh: and its 6 quads cover 1536 faces of area",
+     m.quads.reduce((s, q) => s + q.area, 0) === 1536);
+  ok("mesh: the raw face count agrees", solid.faceCount() === 1536);
+  ok("mesh: the saving is 256x", solid.faceCount() / m.count === 256);
+
+  const bar = G.VoxelWorld({ chunkSize: 16 });
+  bar.fill(0, 0, 0, 3, 0, 0, 2);
+  const bm = bar.mesh(0, 0, 0);
+  ok("mesh: a 4x1x1 bar is 6 quads", bm.count === 6, bm.count + " quads");
+  // the top quad spans the bar's length on whichever axis is u or v for y
+  ok("mesh: the four top faces merged into one quad of area 4",
+     bm.quads.filter(q => q.axis === "y" && q.dir === 1 && q.area === 4).length === 1);
+  ok("mesh: total area equals the bar's surface, 18",
+     bm.quads.reduce((s, q) => s + q.area, 0) === 18);
+
+  // two ids must NOT merge, or a two-coloured wall loses its pattern
+  const two = G.VoxelWorld({ chunkSize: 16 });
+  two.fill(0, 0, 0, 1, 0, 0, 1);
+  two.set(2, 0, 0, 2);
+  const tm = two.mesh(0, 0, 0);
+  ok("mesh: different block ids stay separate quads",
+     tm.quads.filter(q => q.axis === "y" && q.dir === 1).length === 2);
+}
+
+// edit operations
+{
+  const w = G.VoxelWorld({ chunkSize: 8 });
+  ok("edit: fill writes every cell", w.fill(0, 0, 0, 1, 1, 1, 3) === 8);
+  ok("edit: and they are all there", w.get(1, 1, 1) === 3);
+  ok("edit: hollow leaves the interior alone",
+     (w.hollow(0, 0, 0, 2, 2, 2, 4) === 26, w.get(1, 1, 1) === 3 && w.get(2, 2, 2) === 4));
+
+  const s = G.VoxelWorld({ chunkSize: 16 });
+  const n = s.sphere(0, 0, 0, 2, 9);
+  ok("edit: a sphere of radius 2 has 33 cells", n === 33, n + " cells");
+  ok("edit: its centre is filled", s.get(0, 0, 0) === 9);
+  ok("edit: its corner is not", s.get(2, 2, 2) === 0);
+
+  const c = G.VoxelWorld({ chunkSize: 16 });
+  ok("edit: a cylinder of radius 1 over 3 rows has 15 cells",
+     c.cylinder(0, 0, 0, 2, 1, 6) === 15);
+
+  // copy/paste is the building half of a building game
+  const src = G.VoxelWorld({ chunkSize: 8 });
+  src.fill(0, 0, 0, 1, 1, 0, 5);
+  const schem = src.copy(0, 0, 0, 1, 1, 0);
+  ok("schematic: size is recorded", schem.size.join(",") === "2,2,1");
+  ok("schematic: versioned for a future format", schem.version === 1);
+  const dst = G.VoxelWorld({ chunkSize: 8 });
+  dst.paste(schem, 10, 0, 0);
+  ok("schematic: paste lands at the offset", dst.get(11, 1, 0) === 5);
+  ok("schematic: and nothing landed at the origin", dst.get(0, 0, 0) === 0);
+}
+
+// noise and terrain
+{
+  const a = G.noise3(42), b = G.noise3(42), c = G.noise3(43);
+  let same = true, ranged = true;
+  for (let i = 0; i < 50; i++) {
+    const v = a(i * 0.37, i * 0.11, i * 0.73);
+    if (v !== b(i * 0.37, i * 0.11, i * 0.73)) same = false;
+    if (!(v >= 0 && v < 1)) ranged = false;
+  }
+  ok("noise: the same seed gives the same value", same);
+  ok("noise: every sample is in [0,1)", ranged);
+  ok("noise: a different seed gives a different world", a(1.5, 2.5, 3.5) !== c(1.5, 2.5, 3.5));
+
+  const w1 = G.VoxelWorld({ chunkSize: 16 }), w2 = G.VoxelWorld({ chunkSize: 16 });
+  const t1 = G.terrain(w1, { seed: 11, size: 16, base: 3, amp: 6 });
+  const t2 = G.terrain(w2, { seed: 11, size: 16, base: 3, amp: 6 });
+  let identical = true;
+  for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) {
+    if (t1.heightAt(x, z) !== t2.heightAt(x, z)) identical = false;
+  }
+  ok("terrain: the same seed rebuilds the same world", identical);
+  ok("terrain: heights stay inside base..base+amp",
+     t1.heights.every(h => h >= 3 && h <= 9));
+  ok("terrain: the surface block is the top id", w1.get(0, t1.heightAt(0, 0), 0) === 2);
+  ok("terrain: and the block below is ground", w1.get(0, t1.heightAt(0, 0) - 1, 0) === 1);
+  const t3 = G.terrain(G.VoxelWorld({ chunkSize: 16 }), { seed: 99, size: 16, base: 3, amp: 6 });
+  ok("terrain: a different seed gives a different surface",
+     t3.heights.join(",") !== t1.heights.join(","));
+
+  const map = G.voxelToMap(w1, { w: 16, d: 16, maxY: 32 });
+  ok("map: the top-down view shows the surface block", map.at(0, 0) === 2);
+  ok("map: it is the map's own size", map.width === 16 && map.height === 16);
+}
+
+/* ---------- v1.2: Tiled JSON ---------- */
+{
+  const map = {
+    width: 4, height: 3, tilewidth: 16, tileheight: 16,
+    tilesets: [{ firstgid: 1, name: "tiles" }],
+    layers: [
+      { name: "floor", type: "tilelayer", width: 4, height: 3,
+        data: [1, 1, 1, 1,
+               1, 1, 1, 1,
+               1, 1, 1, 1] },
+      { name: "walls", type: "tilelayer", width: 4, height: 3,
+        data: [0, 0, 0, 0,
+               0, 2, 2, 0,
+               0, 0, 0, 0] }
+    ]
+  };
+  const t = G.tiled.parse(map);
+  ok("tiled: the map size is read", t.width === 4 && t.height === 3);
+  ok("tiled: the tile size is read", t.tilewidth === 16);
+  ok("tiled: both layers are read", t.layers.length === 2);
+  ok("tiled: a gid comes back by name and cell", t.gidAt("walls", 1, 1) === 2);
+  ok("tiled: an empty cell is 0", t.gidAt("walls", 0, 0) === 0);
+  ok("tiled: out of bounds is 0, not a crash", t.gidAt("walls", 9, 9) === 0);
+  ok("tiled: a missing layer is 0", t.gidAt("nope", 0, 0) === 0);
+  ok("tiled: a layer without data is refused loudly", (function () {
+    try { G.tiled.parse({ width: 1, height: 1, layers: [{ name: "x" }] }); return false; }
+    catch (e) { return /no data/.test(e.message); }
+  })());
+
+  const rects = t.collisionRects("floor");
+  ok("tiled: a solid floor becomes ONE body, not 12", rects.length === 1, rects.length + " rects");
+  ok("tiled: and it covers the whole layer", rects[0].w === 4 && rects[0].h === 3);
+
+  const wall = t.collisionRects("walls");
+  ok("tiled: two adjacent wall tiles merge into one 2x1 body",
+     wall.length === 1 && wall[0].w === 2 && wall[0].h === 1, JSON.stringify(wall));
+
+  const custom = t.collisionRects("walls", g => g === 2);
+  ok("tiled: a custom solid test is honoured", custom.length === 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

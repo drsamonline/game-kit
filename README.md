@@ -21,10 +21,35 @@ engine every small browser game was re-implementing, extracted once from
 - **text layout** *(v1.1)* — wrap by measured width, auto-fit headings, glyph-coverage checks;
 - **percentage layout** *(v1.1)* — position controls so they survive rotation and resize, with a
   drag helper for building a pad editor;
-- **layout auditing** *(v1.1)* — assert text stays inside its box, which a viewport check cannot do.
+- **layout auditing** *(v1.1)* — assert text stays inside its box, which a viewport check cannot do.;
+- a **chunked voxel world** *(v1.2)* — sparse chunks, **greedy meshing** (a solid 16³ chunk is 6 quads, not 1,536 faces), and `fill` / `hollow` / `sphere` / `cylinder` / `copy` / `paste` edit operations;
+- **seeded 3-D noise and terrain** *(v1.2)* — the same seed rebuilds the same world;
+- a **Tiled map reader** *(v1.2)* — reads the Tiled editor's own JSON, with `collisionRects()` merging solid tiles into as few bodies as possible;
+- a **world-to-map view** *(v1.2)* — a voxel world rendered top-down as tiles.
 
 Every one of those exists because a shipped game got it wrong first. The stories are in
 [**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — ten rules, each tied to the bug that taught it.
+
+## Voxels and tilemaps *(v1.2)*
+
+```js
+const world = Game.VoxelWorld({ chunkSize: 16 });
+Game.terrain(world, { seed: 42, size: 32, base: 4, amp: 10 });
+
+world.set(0, 20, 0, 3);
+world.sphere(8, 22, 8, 3, 4);          // a boulder
+const schem = world.copy(7, 19, 7, 11, 25, 11);   // versioned, JSON-safe
+world.paste(schem, 24, 19, 24);        // build it again, elsewhere
+
+const mesh = world.mesh(0, 0, 0);      // greedy-merged quads, min corner + uw/vh
+// mesh.quads -> [{axis:'y', dir:1, block:2, x, y, z, u, v, uw, vh, area}]
+```
+
+```js
+const t = Game.tiled.parse(await (await fetch("level.json")).json());
+t.gidAt("walls", 3, 4);                 // bounds-safe: 0, never a crash
+t.collisionRects("walls", g => g > 0);  // [{x, y, w, h}] — merged, not per tile
+```
 
 ## Use it
 

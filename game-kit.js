@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.1.0" };
+  var G = { version: "1.2.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -394,6 +394,396 @@
     /* two rectangles must not overlap */
     overlap: function (a, b) {
       return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+  };
+
+
+  /* =========================================================================
+     G.VoxelWorld — chunked voxel storage, greedy meshing, edit operations.
+
+     A world is a SPARSE MAP OF FIXED-SIZE CHUNKS, not one giant array: that is
+     what makes an editable 3-D world possible in a browser. An empty chunk
+     costs nothing, and a chunk that is emptied is dropped.
+
+     Greedy meshing merges adjacent faces that share a block id into one quad,
+     so a solid 16^3 chunk costs 6 quads instead of 1,536. Without it voxel
+     rendering is unusable; with it a field is a handful of polygons.
+     (Technique from cuberite / TrueCraft / WorldEdit, all read for the
+     algorithm only — no code copied.)
+     ========================================================================= */
+  G.VoxelChunk = function (size) {
+    size = size || 16;
+    return { size: size, blocks: new Uint16Array(size * size * size), count: 0 };
+  };
+
+  G.VoxelWorld = function (opts) {
+    opts = opts || {};
+    var S = opts.chunkSize || 16;
+    var chunks = {};
+    var chunkCount = 0;
+
+    function key(cx, cy, cz) { return cx + "," + cy + "," + cz; }
+    function floorDiv(a, b) { return Math.floor(a / b); }
+    function mod(a, b) { var r = a % b; return r < 0 ? r + b : r; }
+    function idx(x, y, z) { return (mod(y, S) * S + mod(z, S)) * S + mod(x, S); }
+
+    var W = {
+      chunkSize: S,
+
+      get: function (x, y, z) {
+        var c = chunks[key(floorDiv(x, S), floorDiv(y, S), floorDiv(z, S))];
+        return c ? c.blocks[idx(x, y, z)] : 0;
+      },
+
+      set: function (x, y, z, id) {
+        var cx = floorDiv(x, S), cy = floorDiv(y, S), cz = floorDiv(z, S);
+        var k = key(cx, cy, cz), c = chunks[k];
+        if (!c) {
+          if (!id) return W;
+          c = G.VoxelChunk(S);
+          chunks[k] = c;
+          chunkCount++;
+        }
+        var i = idx(x, y, z);
+        var was = c.blocks[i];
+        if (was === id) return W;
+        c.blocks[i] = id;
+        c.count += (id ? 1 : 0) - (was ? 1 : 0);
+        if (c.count <= 0) { delete chunks[k]; chunkCount--; }
+        return W;
+      },
+
+      chunkCount: function () { return chunkCount; },
+
+      /* the chunks that exist, as [{cx, cy, cz, count}] — nothing is allocated
+         for empty space, so this is the whole world */
+      chunkKeys: function () {
+        var out = [];
+        for (var k in chunks) {
+          if (!Object.prototype.hasOwnProperty.call(chunks, k)) continue;
+          var p = k.split(",");
+          out.push({ cx: +p[0], cy: +p[1], cz: +p[2], count: chunks[k].count });
+        }
+        return out;
+      },
+
+      /* ---------- edit operations (WorldEdit's vocabulary, reimplemented) ---------- */
+      fill: function (x0, y0, z0, x1, y1, z1, id) {
+        var xa = Math.min(x0, x1), xb = Math.max(x0, x1);
+        var ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+        var za = Math.min(z0, z1), zb = Math.max(z0, z1);
+        var n = 0;
+        for (var y = ya; y <= yb; y++)
+          for (var z = za; z <= zb; z++)
+            for (var x = xa; x <= xb; x++) { W.set(x, y, z, id); n++; }
+        return n;
+      },
+
+      /* a hollow shell: the same box with its interior left alone */
+      hollow: function (x0, y0, z0, x1, y1, z1, id) {
+        var xa = Math.min(x0, x1), xb = Math.max(x0, x1);
+        var ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+        var za = Math.min(z0, z1), zb = Math.max(z0, z1);
+        var n = 0;
+        for (var y = ya; y <= yb; y++)
+          for (var z = za; z <= zb; z++)
+            for (var x = xa; x <= xb; x++) {
+              var edge = x === xa || x === xb || y === ya || y === yb || z === za || z === zb;
+              if (edge) { W.set(x, y, z, id); n++; }
+            }
+        return n;
+      },
+
+      sphere: function (cx, cy, cz, r, id) {
+        var n = 0, r2 = r * r;
+        for (var y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++)
+          for (var z = Math.floor(cz - r); z <= Math.ceil(cz + r); z++)
+            for (var x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+              var dx = x - cx, dy = y - cy, dz = z - cz;
+              if (dx * dx + dy * dy + dz * dz <= r2) { W.set(x, y, z, id); n++; }
+            }
+        return n;
+      },
+
+      /* a vertical cylinder: useful for pillars, wells and tree trunks */
+      cylinder: function (cx, cz, y0, y1, r, id) {
+        var n = 0, r2 = r * r;
+        var ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+        for (var y = ya; y <= yb; y++)
+          for (var z = Math.floor(cz - r); z <= Math.ceil(cz + r); z++)
+            for (var x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+              var dx = x - cx, dz = z - cz;
+              if (dx * dx + dz * dz <= r2) { W.set(x, y, z, id); n++; }
+            }
+        return n;
+      },
+
+      /* copy a box out as a schematic: {version, size:[w,h,d], origin, blocks} */
+      copy: function (x0, y0, z0, x1, y1, z1) {
+        var xa = Math.min(x0, x1), ya = Math.min(y0, y1), za = Math.min(z0, z1);
+        var w = Math.abs(x1 - x0) + 1, h = Math.abs(y1 - y0) + 1, d = Math.abs(z1 - z0) + 1;
+        var blocks = new Array(w * h * d);
+        var i = 0;
+        for (var y = 0; y < h; y++)
+          for (var z = 0; z < d; z++)
+            for (var x = 0; x < w; x++) blocks[i++] = W.get(xa + x, ya + y, za + z);
+        return { version: 1, size: [w, h, d], origin: [xa, ya, za], blocks: blocks };
+      },
+
+      /* paste a schematic at an offset; returns the number of cells written */
+      paste: function (schem, dx, dy, dz) {
+        dx = dx || 0; dy = dy || 0; dz = dz || 0;
+        var w = schem.size[0], h = schem.size[1], d = schem.size[2];
+        var i = 0, n = 0;
+        for (var y = 0; y < h; y++)
+          for (var z = 0; z < d; z++)
+            for (var x = 0; x < w; x++) { W.set(dx + x, dy + y, dz + z, schem.blocks[i++]); n++; }
+        return n;
+      },
+
+      /* ---------- greedy meshing ---------- */
+      /* returns {quads, count, tris}. Each quad is
+         {axis:'x'|'y'|'z', dir:1|-1, block, x, y, z, u, v, uw, vh, area}
+         where (x,y,z) is the minimum corner, u/v name the two axes the quad
+         spans, and uw/vh are its size along them. */
+      mesh: function (cx, cy, cz) {
+        var ox = cx * S, oy = cy * S, oz = cz * S;
+        var quads = [];
+        var AX = ["x", "y", "z"];
+        var x = [0, 0, 0], q = [0, 0, 0];
+        var mask = new Array(S * S);
+
+        for (var d = 0; d < 3; d++) {
+          var u = (d + 1) % 3, v = (d + 2) % 3;
+          q[0] = q[1] = q[2] = 0; q[d] = 1;
+
+          for (x[d] = -1; x[d] < S; ) {
+            var n = 0;
+            for (x[v] = 0; x[v] < S; x[v]++) {
+              for (x[u] = 0; x[u] < S; x[u]++) {
+                var a = x[d] >= 0 ? W.get(ox + x[0], oy + x[1], oz + x[2]) : 0;
+                var b = x[d] < S - 1 ? W.get(ox + x[0] + q[0], oy + x[1] + q[1], oz + x[2] + q[2]) : 0;
+                mask[n++] = a && !b ? a : (b && !a ? -b : 0);
+              }
+            }
+            x[d]++;
+
+            n = 0;
+            for (var j = 0; j < S; j++) {
+              for (var i = 0; i < S; ) {
+                var c = mask[n];
+                if (!c) { i++; n++; continue; }
+
+                var w = 1;
+                while (i + w < S && mask[n + w] === c) w++;
+
+                var h = 1, stop = false;
+                while (j + h < S && !stop) {
+                  for (var k = 0; k < w; k++) {
+                    if (mask[n + k + h * S] !== c) { stop = true; break; }
+                  }
+                  if (!stop) h++;
+                }
+
+                var pos = [0, 0, 0];
+                pos[d] = x[d]; pos[u] = i; pos[v] = j;
+
+                quads.push({
+                  axis: AX[d], dir: c > 0 ? 1 : -1, block: Math.abs(c),
+                  x: ox + pos[0], y: oy + pos[1], z: oz + pos[2],
+                  u: AX[u], v: AX[v], uw: w, vh: h, area: w * h
+                });
+
+                for (var l = 0; l < h; l++)
+                  for (var m = 0; m < w; m++) mask[n + m + l * S] = 0;
+                i += w; n += w;
+              }
+            }
+          }
+        }
+        return { quads: quads, count: quads.length, tris: quads.length * 2 };
+      },
+
+      /* the unmerged face count, so the saving greedy meshing makes is a
+         number rather than a claim */
+      faceCount: function () {
+        var n = 0;
+        for (var k in chunks) {
+          if (!Object.prototype.hasOwnProperty.call(chunks, k)) continue;
+          var p = k.split(",");
+          n += W.mesh(+p[0], +p[1], +p[2]).quads.reduce(function (s, qd) {
+            return s + qd.area;
+          }, 0);
+        }
+        return n;
+      }
+    };
+
+    return W;
+  };
+
+  /* ---------- noise, in two and three dimensions ---------- */
+  /* Value noise with a smoothstep fade. Deterministic from the seed, so the
+     same seed gives the same world — the property a level editor depends on. */
+  function hashNoise(ix, iy, iz, seed) {
+    var h = Math.imul(ix | 0, 374761393) + Math.imul(iy | 0, 668265263) +
+            Math.imul(iz | 0, 1274126177) + Math.imul(seed | 0, 2246822519);
+    h = (h ^ (h >>> 13)) >>> 0;
+    h = Math.imul(h, 1274126177) >>> 0;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+  function fade(t) { return t * t * (3 - 2 * t); }
+
+  G.noise3 = function (seed) {
+    seed = seed || 1;
+    return function (x, y, z) {
+      var ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+      var fx = fade(x - ix), fy = fade(y - iy), fz = fade(z - iz);
+      function c(dx, dy, dz) { return hashNoise(ix + dx, iy + dy, iz + dz, seed); }
+      var x00 = c(0, 0, 0) + (c(1, 0, 0) - c(0, 0, 0)) * fx;
+      var x10 = c(0, 1, 0) + (c(1, 1, 0) - c(0, 1, 0)) * fx;
+      var x01 = c(0, 0, 1) + (c(1, 0, 1) - c(0, 0, 1)) * fx;
+      var x11 = c(0, 1, 1) + (c(1, 1, 1) - c(0, 1, 1)) * fx;
+      var y0 = x00 + (x10 - x00) * fy;
+      var y1 = x01 + (x11 - x01) * fy;
+      return y0 + (y1 - y0) * fz;
+    };
+  };
+
+  G.noise2 = function (seed) {
+    var n3 = G.noise3(seed);
+    return function (x, y) { return n3(x, y, 0.5); };
+  };
+
+  /* fractal sum: several octaves of the same noise, each smaller and fainter */
+  G.fbm2 = function (seed, octaves) {
+    var n = G.noise2(seed);
+    octaves = octaves || 4;
+    return function (x, y) {
+      var sum = 0, amp = 1, freq = 1, norm = 0;
+      for (var o = 0; o < octaves; o++) {
+        sum += n(x * freq, y * freq) * amp;
+        norm += amp; amp *= 0.5; freq *= 2;
+      }
+      return sum / norm;
+    };
+  };
+
+  /* ---------- terrain: a heightmap world from noise ---------- */
+  G.terrain = function (world, opts) {
+    opts = opts || {};
+    var size = opts.size || 32;
+    var base = opts.base === undefined ? 4 : opts.base;
+    var amp = opts.amp === undefined ? 10 : opts.amp;
+    var scale = opts.scale || 0.06;
+    var ground = opts.ground === undefined ? 1 : opts.ground;
+    var top = opts.top === undefined ? 2 : opts.top;
+    var height = G.fbm2(opts.seed || 7, opts.octaves || 4);
+
+    var heights = new Array(size * size);
+    for (var z = 0; z < size; z++) {
+      for (var x = 0; x < size; x++) {
+        var h = base + Math.floor(height(x * scale, z * scale) * amp);
+        heights[z * size + x] = h;
+        for (var y = 0; y <= h; y++) world.set(x, y, z, y === h ? top : ground);
+      }
+    }
+    return { size: size, heights: heights, heightAt: function (x, z) { return heights[z * size + x]; } };
+  };
+
+  /* ---------- a world rendered to a map, the way Overviewer does it ---------- */
+  /* Top-down: each column becomes the id of its highest non-empty block.
+     Returns {width, height, tiles:[[id]]} — pan and zoom are the viewer's job. */
+  G.voxelToMap = function (world, box) {
+    box = box || {};
+    var x0 = box.x0 || 0, z0 = box.z0 || 0;
+    var w = box.w || 32, d = box.d || 32;
+    var maxY = box.maxY === undefined ? 255 : box.maxY;
+    var tiles = [];
+    for (var z = 0; z < d; z++) {
+      var row = [];
+      for (var x = 0; x < w; x++) {
+        var id = 0;
+        for (var y = maxY; y >= 0; y--) {
+          var b = world.get(x0 + x, y, z0 + z);
+          if (b) { id = b; break; }
+        }
+        row.push(id);
+      }
+      tiles.push(row);
+    }
+    return { width: w, height: d, tiles: tiles, at: function (x, z) { return tiles[z] ? tiles[z][x] : 0; } };
+  };
+
+  /* =========================================================================
+     G.tiled — read the Tiled editor's JSON, rather than inventing a map format.
+
+     Same reasoning as reading the Agent Skills spec instead of defining our
+     own: Tiled is the format other people's tools already write, so a level
+     made in a real editor loads here unchanged. (melonJS is the reference for
+     how a runtime consumes it; MIT.)
+     ========================================================================= */
+  G.tiled = {
+    /* parse(map) -> {width, height, tilewidth, tileheight, layers, tilesets,
+                     layer(name), gidAt(layerName, x, y)} */
+    parse: function (map) {
+      if (!map || typeof map !== "object") throw new Error("tiled: expected the parsed JSON of a map");
+      var layers = (map.layers || []).map(function (l) {
+        var data = l.data;
+        if (!data) throw new Error("tiled: layer '" + l.name + "' has no data (only uncompressed arrays are read)");
+        return {
+          name: l.name, type: l.type || "tilelayer",
+          width: l.width || map.width, height: l.height || map.height,
+          data: data, visible: l.visible !== false
+        };
+      });
+
+      function findLayer(name) {
+        for (var i = 0; i < layers.length; i++) if (layers[i].name === name) return layers[i];
+        return null;
+      }
+
+      return {
+        width: map.width, height: map.height,
+        tilewidth: map.tilewidth || 16, tileheight: map.tileheight || 16,
+        layers: layers,
+        tilesets: map.tilesets || [],
+        layer: findLayer,
+        gidAt: function (name, x, y) {
+          var l = findLayer(name);
+          if (!l || x < 0 || y < 0 || x >= l.width || y >= l.height) return 0;
+          return l.data[y * l.width + x] || 0;
+        },
+        /* the collision half: merge the solid tiles of a layer into as few
+           rectangles as possible, so a platformer gets a handful of bodies
+           instead of one per tile */
+        collisionRects: function (name, solid) {
+          var l = findLayer(name);
+          if (!l) return [];
+          var isSolid = typeof solid === "function" ? solid : function (g) { return g > 0; };
+          var w = l.width, h = l.height;
+          var used = new Array(w * h);
+          var rects = [];
+          for (var y = 0; y < h; y++) {
+            for (var x = 0; x < w; x++) {
+              if (used[y * w + x] || !isSolid(l.data[y * w + x])) continue;
+              var rw = 1;
+              while (x + rw < w && !used[y * w + x + rw] && isSolid(l.data[y * w + x + rw])) rw++;
+              var rh = 1, grow = true;
+              while (y + rh < h && grow) {
+                for (var k = 0; k < rw; k++) {
+                  if (used[(y + rh) * w + x + k] || !isSolid(l.data[(y + rh) * w + x + k])) { grow = false; break; }
+                }
+                if (grow) rh++;
+              }
+              for (var yy = 0; yy < rh; yy++)
+                for (var xx = 0; xx < rw; xx++) used[(y + yy) * w + x + xx] = 1;
+              rects.push({ x: x, y: y, w: rw, h: rh });
+            }
+          }
+          return rects;
+        }
+      };
     }
   };
 
