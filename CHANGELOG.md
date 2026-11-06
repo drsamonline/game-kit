@@ -1,3 +1,51 @@
+## [1.5.0]
+
+The scene graph — the last piece of the kit's core, and the bug it prevents: parts
+that drift apart as soon as anything turns.
+
+### Added
+- **`Game.node(props)` / `Game.Node`** — a transform hierarchy: `x`, `y`, `rot`,
+  `sx`, `sy`, plus `w`/`h`, `visible`, `name`, `tag` and a free `data` slot.
+- **`append` / `remove` / `detach` / `clear`** — reparenting unhooks the old edge;
+  appending a node twice **moves** it instead of duplicating it; removing a
+  stranger returns `false` rather than throwing.
+- **`world()`** — the composed `{x, y, rot, sx, sy}`, **cached and invalidated
+  down the subtree**. `set()` marks the subtree dirty; a query composes from the
+  nearest clean ancestor, so a 5,000-node level is not 5,000 multiplies a frame.
+- **`worldPoint` / `localPoint` / `box` / `bounds` / `query`** — a real inverse
+  (a zero scale has none, so `localPoint` returns **`null`**, not `Infinity`), the
+  node's own world box, the box of a whole subtree, and one-walk overlap queries.
+  `bounds` applies rotation and scale to the **corners**, not just the origin.
+- **`walk(fn, {includeHidden, maxNodes})`** — depth-first, parents first, in
+  insertion order; `false` prunes a subtree. Hidden subtrees are skipped. The
+  children of a level are queued before any callback runs, so a callback that
+  removes or appends a sibling can neither skip nor invent a node.
+- **`find(name)` / `byTag(tag)` / `depth()` / `root()`**.
+
+### Refused, on purpose
+- **A cycle.** `append` will not make a node its own ancestor: a loop does not
+  throw, it spins, and the game freezes on its last frame. `parent` is public, so
+  `walk` also stops at a `maxNodes` cap (default 1e6) instead of hanging the tab.
+- **Recursion.** `walk`, the dirty sweep and the bounds pass use an explicit
+  stack. A 20,000-deep chain walks in the test suite; the recursive version dies
+  on it.
+- **`NaN`.** `set()` ignores a non-finite number instead of letting one poison
+  every transform below it.
+
+### Verified
+`node test-node.js` — **214 assertions, 0 failing** (36 new). Mutation-tested ten
+ways: removing the cycle guard fails "appending an ancestor is refused"; a
+recursive walk fails the mid-walk mutation test; never invalidating the cache
+fails four transform tests; removing the singular guard fails the zero-scale
+inverse; bounds from the origin alone fails the rotated-box and hidden-geometry
+tests; not skipping hidden nodes fails three; not detaching on reparent fails;
+dropping the `NaN` guard fails; ignoring the prune return fails; and removing the
+`maxNodes` cap makes the suite **hang** — which is the freeze itself, not an
+assertion, and is recorded here rather than hidden.
+
+Also fixed: the README's "Verified" block still said `38 passed` from v1.0 while
+the suite was at 178. It now says what the suite actually prints.
+
 ## [1.4.0]
 
 Code-audio — the last piece of the kit's core, and the three ways a hand-written

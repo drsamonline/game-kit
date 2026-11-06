@@ -22,7 +22,7 @@
 <body>
 <header>
   <h1>game-kit</h1>
-  <p class="mut">The shared game core: a fixed-timestep loop, ECS, physics, voxels, sprite batching, code-audio and maths. Zero dependencies.</p>
+  <p class="mut">The shared game core: a fixed-timestep loop, ECS, physics, voxels, sprite batching, a scene graph, code-audio and maths. Zero dependencies.</p>
 <figure style="margin:26px 0 0;text-align:center">
   <img src="assets/concept.svg" alt="A diagram of what this kit does"
        style="width:100%;max-width:320px;height:auto">
@@ -38,6 +38,7 @@
     <div class="card"><h3>Save &amp; maths</h3><p>save/load plus clamp, lerp, dist, aabb, rand.</p></div>
     <div class="card"><h3>Voxels &amp; tilemaps</h3><p>Sparse chunks with greedy meshing — a solid 16³ chunk is 6 quads, not 1,536 faces — and the Tiled editor's own JSON.</p></div>
     <div class="card"><h3>Sprite batching</h3><p>Sprites grouped by image: 2,000 sprites cost 4 draw calls, and a full buffer spills instead of dropping the tail.</p></div>
+    <div class="card"><h3>Scene graph</h3><p>Parent/child transforms composed and cached, cycles refused at the door, and a 20,000-deep chain that walks instead of overflowing the stack.</p></div>
     <div class="card"><h3>Code-audio</h3><p>Game music is patterns, not files: a bpm grid and seeded oscillators rendered to samples, with envelopes that cannot click.</p></div>
   </div>
   <p class="mut">Extracted from <code>neon-engine</code> and <code>Aethelgard-Engine</code>. Pairs with <code>web-kit</code> for storage.</p>

@@ -583,6 +583,142 @@ try {
   ok("audio: play with no context is null, not a crash", A.play(null, coin) === null);
 })();
 
+/* ---- v1.5: the scene graph ---- */
+(() => {
+  const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
+
+  // translation composes down the chain
+  const root = G.node({ name: "root", x: 100, y: 50 });
+  const body = G.node({ name: "body", x: 10, y: 0 });
+  const gun = G.node({ name: "gun", x: 5, y: 0 });
+  root.append(body);
+  body.append(gun);
+  ok("scene: a child's world position includes its parents'", near(gun.world().x, 115) && near(gun.world().y, 50));
+  ok("scene: depth is counted, not guessed", gun.depth() === 2 && root.depth() === 0);
+  ok("scene: root() climbs to the top", gun.root() === root);
+
+  // rotation composes: a parent turned 90 deg carries its child round with it
+  root.set({ rot: Math.PI / 2 });
+  ok("scene: rotation carries a child", near(gun.world().x, 100, 1e-9) && near(gun.world().y, 65, 1e-9));
+  const p = gun.worldPoint(0, 0);
+  ok("scene: worldPoint agrees with world()", near(p.x, gun.world().x) && near(p.y, gun.world().y));
+
+  // scale multiplies along the chain
+  root.set({ rot: 0, sx: 2, sy: 3 });
+  ok("scene: scale multiplies down the chain", near(gun.world().sx, 2) && near(gun.world().sy, 3));
+  ok("scene: scaled offset is scaled", near(gun.world().x, 130) && near(gun.world().y, 50));
+
+  // the cache invalidates through the tree, without touching the child
+  root.set({ sx: 1, sy: 1 });
+  const before = gun.world().x;
+  root.set({ x: 200 });
+  ok("scene: moving a parent moves the child's cached world", gun.world().x === before + 100);
+
+  // a cycle is refused at the door, not survived at runtime
+  const cyc = G.node({ name: "cyc" });
+  ok("scene: appending an ancestor is refused", body.append(root) === false);
+  ok("scene: a refused cycle leaves the tree alone", root.parent === null && root.children.indexOf(body) === 0);
+  ok("scene: a node cannot parent itself", root.append(root) === false);
+  const deepWalk = root.walk(() => {});
+  ok("scene: the tree still walks after a refused cycle", deepWalk === 3);
+
+  // appending twice moves, never duplicates
+  const dup = G.node({ name: "dup" });
+  root.append(body); root.append(dup); root.append(body);
+  ok("scene: re-appending moves the child to the end", root.children.length === 2 && root.children[1] === body);
+
+  // reparenting detaches from the old parent
+  const other = G.node({ name: "other" });
+  other.append(body);
+  ok("scene: reparenting removes the old edge", root.children.indexOf(body) < 0 && body.parent === other);
+
+  // remove/detach are honest about a miss
+  ok("scene: removing a stranger is false, not a throw", root.remove(G.node()) === false);
+  ok("scene: detach unhooks the node", body.detach() === true && body.parent === null);
+
+  // a callback that mutates the tree mid-walk must not skip a sibling or
+  // invent one: the level is queued before any callback runs
+  const wroot = G.node({ name: "w" });
+  const seen = [];
+  const wk = [0, 1, 2, 3].map((i) => G.node({ name: "k" + i }));
+  wk.forEach((k) => wroot.append(k));
+  wroot.walk((n) => {
+    seen.push(n.name);
+    if (n.name === "k0") { wroot.remove(wk[2]); wroot.append(G.node({ name: "late" })); }
+  });
+  ok("scene: a removal and an append mid-walk neither skip nor invent", seen.join(",") === "w,k0,k1,k2,k3");
+  ok("scene: the walk's mutations really happened", wroot.children.length === 4 && wroot.children.indexOf(wk[2]) < 0);
+
+  // parent is a public field: a loop closed by assignment must not freeze the
+  // walk (append refuses it, assignment cannot be refused)
+  const cycA = G.node({ name: "A" }), cycB = G.node({ name: "B" });
+  cycA.append(cycB);
+  cycA.parent = cycB;                       // the cycle append would have refused
+  cycB.children.push(cycA);                 // ...and this is the loop it prevents
+  const capped = cycA.walk(() => {}, { maxNodes: 50 });
+  ok("scene: a hand-made cycle is capped, not hung", capped === 50);
+  cycA.parent = null; cycB.children.length = 0;
+
+  // 20,000 deep: slow, not a stack overflow (the recursive version dies here)
+  const chain = G.node({ x: 0 });
+  let tail = chain;
+  for (let i = 0; i < 20000; i++) { const n = G.node({ x: 1 }); tail.append(n); tail = n; }
+  let walked = 0;
+  chain.walk(() => { walked++; });
+  ok("scene: a 20,000-deep chain walks without overflowing", walked === 20001);
+  ok("scene: the deep chain's world transform is right", tail.world().x === 20000);
+  ok("scene: depth() agrees at the bottom of the chain", tail.depth() === 20000);
+  let cappedCount = 0;
+  const capHit = chain.walk(() => { cappedCount++; }, { maxNodes: 500 });
+  ok("scene: walk honours a node cap", capHit === 500 && cappedCount === 500);
+
+  // hidden subtrees are skipped by the walk and by bounds
+  const hid = G.node({ name: "hid", x: 1000, y: 1000, w: 10, h: 10 });
+  const show = G.node({ name: "show", x: 0, y: 0, w: 10, h: 10 });
+  const hroot = G.node({});
+  hroot.append(show); hroot.append(hid);
+  hid.set({ visible: false });
+  ok("scene: a hidden node is skipped by the walk", hroot.walk(() => {}) === 2);
+  ok("scene: includeHidden sees it", hroot.walk(() => {}, { includeHidden: true }) === 3);
+  const hb = hroot.bounds();
+  ok("scene: hidden geometry is out of the bounds", hb && hb.w === 10 && hb.x === -5);
+  ok("scene: a fully hidden tree has no bounds", (() => { const r = G.node({ visible: false }); const k = G.node({ w: 4, h: 4, visible: false }); r.append(k); return r.bounds() === null; })());
+
+  // bounds apply rotation to the CORNERS, not just the origin
+  const box = G.node({ w: 10, h: 10, rot: Math.PI / 4 });
+  const bb = box.bounds();
+  ok("scene: a rotated box's bounds grow", near(bb.w, 10 * Math.SQRT2, 1e-9) && near(bb.h, 10 * Math.SQRT2, 1e-9));
+
+  // localPoint is a real inverse, and refuses a singular transform
+  const t = G.node({ x: 30, y: 20, rot: 0.7, sx: 2, sy: 4 });
+  const wp = t.worldPoint(3, -5);
+  const lp = t.localPoint(wp.x, wp.y);
+  ok("scene: localPoint inverts worldPoint", near(lp.x, 3, 1e-9) && near(lp.y, -5, 1e-9));
+  const flat = G.node({ sx: 0 });
+  ok("scene: a zero scale has no inverse — null, not Infinity", flat.localPoint(5, 5) === null);
+  ok("scene: a zero scale's world point is still finite", isFinite(flat.worldPoint(5, 5).x));
+
+  // one NaN must not poison the tree
+  const nanNode = G.node({ x: 5 });
+  nanNode.set({ x: NaN });
+  ok("scene: a non-finite set is ignored", nanNode.x === 5 && isFinite(nanNode.world().x));
+
+  // lookup and pruning
+  const lroot = G.node({ name: "l" });
+  const a = G.node({ name: "a", tag: "enemy", x: 0, y: 0, w: 10, h: 10 });
+  const b = G.node({ name: "b", tag: "enemy", x: 100, y: 0, w: 10, h: 10 });
+  const c = G.node({ name: "c", tag: "pickup", x: 2, y: 0, w: 4, h: 4 });
+  lroot.append(a); lroot.append(b); a.append(c);
+  ok("scene: find() by name", lroot.find("c") === c && lroot.find("nope") === null);
+  ok("scene: byTag() collects every match", lroot.byTag("enemy").length === 2 && lroot.byTag("pickup")[0] === c);
+  const hits = lroot.query({ x: -10, y: -10, w: 20, h: 20 });
+  ok("scene: query() returns what overlaps", hits.indexOf(a) >= 0 && hits.indexOf(c) >= 0 && hits.indexOf(b) < 0);
+  let pruned = 0;
+  const visited = [];
+  lroot.walk((n) => { pruned++; visited.push(n.name); if (n === a) return false; });
+  ok("scene: returning false prunes a subtree", pruned === 3 && visited.join(",") === "l,a,b" && visited.indexOf("c") < 0);
+})();
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

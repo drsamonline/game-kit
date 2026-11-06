@@ -27,10 +27,47 @@ engine every small browser game was re-implementing, extracted once from
 - a **Tiled map reader** *(v1.2)* — reads the Tiled editor's own JSON, with `collisionRects()` merging solid tiles into as few bodies as possible;
 - a **world-to-map view** *(v1.2)* — a voxel world rendered top-down as tiles.
 - **sprite batching** *(v1.3)* — `Game.atlas` + `Game.SpriteBatch`: sprites grouped by image, so 2,000 sprites cost 4 draw calls; a fixed buffer that **spills instead of dropping the tail**, a stable `z` order, and culling/misses you can count.
+- **a scene graph** *(v1.5)* — `Game.node`: parent/child transforms composed and **cached** (moving one node dirties only its subtree), a cycle **refused at the door**, a walk that never recurses (20,000 deep is slow, not a stack overflow), and `localPoint` that returns `null` instead of `Infinity` for a zero scale.
 - **code-audio** *(v1.4)* — `Game.audio`: pitches from names, seeded oscillators, ADSR that cannot click, a pattern grid (`bpm` + `seq`) rendered to a `Float32Array`, five SFX presets as data, and `play(ctx, samples)` as the only browser-dependent line. **Game music is patterns, not files.**
 
 Every one of those exists because a shipped game got it wrong first. The stories are in
 [**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — eleven rules, each tied to the bug that taught it.
+
+## Scene graph *(v1.5)*
+
+A gun follows a hand that follows a body that follows a camera. Doing that by hand
+means adding the parent's position at every draw call — and then forgetting the
+rotation, so the parts drift apart the moment anything turns.
+
+```js
+const player = Game.node({ x: 100, y: 50 });
+const gun    = Game.node({ x: 12, y: 0, w: 8, h: 4 });
+player.append(gun);
+
+player.set({ rot: Math.PI / 2 });   // the gun turns with the player
+gun.world();                        // { x, y, rot, sx, sy } — composed, and cached
+gun.worldPoint(0, 0);               // the muzzle, in world space
+gun.localPoint(200, 60);            // ...and back again (null if the scale is 0)
+gun.box();                          // this node's world box
+player.bounds();                    // the box of everything visible below it
+player.query({ x: 0, y: 0, w: 640, h: 480 });   // what overlaps, one walk
+```
+
+- **The cache invalidates down the tree.** Moving a parent marks its subtree dirty;
+  a world transform composes from the nearest clean ancestor. Dragging a 5,000-node
+  level around does not cost 5,000 matrix multiplies per frame.
+- **A cycle is refused by `append`.** A loop does not throw — it spins, and the game
+  freezes on its last frame. Refused, the tree is simply unchanged. `parent` is a
+  public field, so `walk` also carries a node cap as the last line of defence.
+- **Nothing recurses.** `walk`, the dirty sweep and the bounds pass use an explicit
+  stack: a 20,000-deep chain is slow, not a stack overflow. The recursive version
+  works beautifully until someone builds a rope.
+- **A callback may mutate the tree.** Children are queued before any callback for
+  that level runs, so a node that removes a sibling mid-walk cannot make the walk
+  skip or invent one.
+- **Hidden subtrees are skipped** by `walk` and excluded from `bounds` — and a
+  `NaN` handed to `set` is ignored rather than allowed to poison every transform
+  below it.
 
 ## Code-audio *(v1.4)*
 
@@ -176,13 +213,17 @@ Every addition is reimplemented from the idea, not copied.
 
 ```
 node test-node.js
-38 passed, 0 failed
+214 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
 save/load, every maths helper, and the v2 surface: RNG reproducibility, ECS
 (component filtering and **update order**), the state machine, a collision case
-per primitive, and a physics resolution case — all headless, no browser.
+per primitive, a physics resolution case, the voxel and Tiled layer, sprite
+batching (spill, z-order, culling, misses), code-audio (declick, normalise,
+articulation) and the scene graph (compose, cache invalidation, refused cycles,
+a 20,000-deep chain, mid-walk mutation, singular transforms) — all headless, no
+browser.
 
 ## Games built with game-kit
 

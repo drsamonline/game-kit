@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.4.0" };
+  var G = { version: "1.5.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -990,6 +990,257 @@
 
     return B;
   };
+
+
+
+  /* ---------- scene graph (v1.5) ----------
+     A hierarchy of transforms, because every 2-D game eventually needs one:
+     a gun that follows a hand that follows a body that follows a camera. Doing
+     it by hand means adding the parent's position at every draw call and then
+     forgetting the rotation — so the parts drift apart as soon as anything
+     turns.
+
+     Three things this is built around, all of them failure modes:
+
+     1. A WORLD TRANSFORM IS CACHED AND INVALIDATED, not recomputed per query.
+        Moving one node marks its subtree dirty; asking for a world transform
+        composes from the nearest clean ancestor. Dragging a 5,000-node level
+        around does not cost 5,000 matrix multiplies per frame.
+     2. A CYCLE IS REFUSED AT THE DOOR. `append` will not make a node its own
+        ancestor, because a cycle does not throw — it hangs the walk and the
+        game freezes on its last frame, which is the hardest kind of bug to
+        see. Refused, the tree is simply unchanged.
+     3. NOTHING RECURSES. `walk`, the dirty sweep and the bounds pass use an
+        explicit stack, so a 20,000-deep chain is slow, not a stack overflow.
+        The recursive version works beautifully until someone builds a rope.
+
+     A node with a zero scale has no inverse, so `localPoint` returns null
+     rather than a world of Infinity/NaN that silently poisons every later
+     number it touches.
+  */
+  G.Node = function (props) {
+    this.name = null;
+    this.tag = null;
+    this.x = 0; this.y = 0; this.rot = 0; this.sx = 1; this.sy = 1;
+    this.w = 0; this.h = 0;
+    this.visible = true;
+    this.parent = null;
+    this.children = [];
+    this.data = null;
+    this._w = { x: 0, y: 0, rot: 0, sx: 1, sy: 1 };
+    this._dirty = true;
+    if (props) this.set(props);
+  };
+
+  G.Node.prototype = {
+    /* set() is the only way in: it rejects a non-finite number instead of
+       letting one NaN destroy every transform below it */
+    set: function (props) {
+      if (!props) return this;
+      var keys = ["x", "y", "rot", "sx", "sy", "w", "h"];
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (props[k] === undefined) continue;
+        var v = props[k];
+        if (typeof v !== "number" || !isFinite(v)) continue;
+        this[k] = v;
+      }
+      if (props.name !== undefined) this.name = props.name;
+      if (props.tag !== undefined) this.tag = props.tag;
+      if (props.visible !== undefined) this.visible = !!props.visible;
+      if (props.data !== undefined) this.data = props.data;
+      this.touch();
+      return this;
+    },
+
+    /* mark this node and everything under it stale */
+    touch: function () {
+      var stack = [this], guard = 0, max = 1e7;
+      while (stack.length) {
+        var n = stack.pop();
+        n._dirty = true;
+        if (++guard > max) break;
+        for (var i = 0; i < n.children.length; i++) stack.push(n.children[i]);
+      }
+      return this;
+    },
+
+    append: function (child) {
+      if (!child || child === this) return false;
+      /* walking up from `this` — if the child is an ancestor, this would close
+         a loop, and a loop is a freeze rather than an exception */
+      for (var p = this; p; p = p.parent) if (p === child) return false;
+      if (child.parent === this) {
+        /* already here: move it to the end, never duplicate it */
+        var at = this.children.indexOf(child);
+        if (at >= 0) this.children.splice(at, 1);
+      } else if (child.parent) {
+        child.parent.remove(child);
+      }
+      child.parent = this;
+      this.children.push(child);
+      child.touch();
+      return true;
+    },
+
+    remove: function (child) {
+      if (!child) return false;
+      var at = this.children.indexOf(child);
+      if (at < 0) return false;
+      this.children.splice(at, 1);
+      child.parent = null;
+      child.touch();
+      return true;
+    },
+
+    detach: function () { return this.parent ? this.parent.remove(this) : false; },
+    clear: function () {
+      for (var i = 0; i < this.children.length; i++) { this.children[i].parent = null; this.children[i].touch(); }
+      this.children = [];
+      return this;
+    },
+
+    root: function () { var n = this; while (n.parent) n = n.parent; return n; },
+    depth: function () { var d = 0, n = this; while (n.parent) { n = n.parent; d++; } return d; },
+
+    world: function () {
+      if (!this._dirty) return this._w;
+      /* collect the dirty run up to the nearest clean ancestor, then compose
+         back down — iterative, so depth cannot overflow the stack */
+      var chain = [], n = this;
+      while (n && n._dirty) { chain.push(n); n = n.parent; }
+      var base = n ? n._w : { x: 0, y: 0, rot: 0, sx: 1, sy: 1 };
+      for (var i = chain.length - 1; i >= 0; i--) {
+        var c = chain[i], cw = Math.cos(base.rot), sw = Math.sin(base.rot);
+        var lx = c.x * base.sx, ly = c.y * base.sy;
+        c._w = {
+          x: base.x + cw * lx - sw * ly,
+          y: base.y + sw * lx + cw * ly,
+          rot: base.rot + c.rot,
+          sx: base.sx * c.sx,
+          sy: base.sy * c.sy
+        };
+        c._dirty = false;
+        base = c._w;
+      }
+      return this._w;
+    },
+
+    worldPoint: function (lx, ly) {
+      var w = this.world();
+      var x = lx * w.sx, y = ly * w.sy, c = Math.cos(w.rot), s = Math.sin(w.rot);
+      return { x: w.x + c * x - s * y, y: w.y + s * x + c * y };
+    },
+
+    /* the inverse. A zero (or non-finite) scale has no inverse, so this says
+       null instead of handing back Infinity that spreads into the next sum */
+    localPoint: function (wx, wy) {
+      var w = this.world();
+      if (!(Math.abs(w.sx) > 1e-9) || !(Math.abs(w.sy) > 1e-9)) return null;
+      var dx = wx - w.x, dy = wy - w.y;
+      var c = Math.cos(-w.rot), s = Math.sin(-w.rot);
+      var rx = c * dx - s * dy, ry = s * dx + c * dy;
+      return { x: rx / w.sx, y: ry / w.sy };
+    },
+
+    /* depth-first, parents before children, in insertion order. fn(node, depth)
+       may return false to prune that subtree.
+
+       A callback that removes a sibling, or appends one, cannot make the walk
+       skip or invent anything — the children of a node are all QUEUED before
+       any callback for that level runs, so the queue is the snapshot. (That is
+       why there is no children.slice() here: it was doing nothing except
+       allocating once per node.) Nodes removed mid-walk are still visited
+       once, the way a DOM NodeIterator behaves.
+
+       The node cap is the last line of defence. `parent` is a public field, so
+       a caller can close a loop by assignment and bypass append's refusal —
+       and a loop does not throw, it spins. The walk stops at `maxNodes` and
+       reports the count it reached instead of freezing the tab. */
+    walk: function (fn, opts) {
+      opts = opts || {};
+      var max = opts.maxNodes > 0 ? opts.maxNodes : 1e6;
+      var count = 0, stack = [{ n: this, d: 0 }];
+      while (stack.length && count < max) {
+        var top = stack.pop(), n = top.n, d = top.d;
+        if (!opts.includeHidden && !n.visible) continue;
+        count++;
+        if (fn && fn(n, d) === false) continue;
+        for (var i = n.children.length - 1; i >= 0; i--) stack.push({ n: n.children[i], d: d + 1 });
+      }
+      return count;
+    },
+
+    find: function (name) {
+      var hit = null;
+      this.walk(function (n) { if (n.name === name) { hit = n; return false; } }, { includeHidden: true });
+      return hit;
+    },
+
+    byTag: function (tag) {
+      var out = [];
+      this.walk(function (n) { if (n.tag === tag) out.push(n); }, { includeHidden: true });
+      return out;
+    },
+
+    /* the axis-aligned box of everything visible below (and including) this
+       node, in world space — rotation and scale applied to each corner, not
+       just to the origin. null when there is nothing visible. */
+    bounds: function (opts) {
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false;
+      this.walk(function (n) {
+        var w = n.world();
+        var hw = (n.w || 0) / 2, hh = (n.h || 0) / 2;
+        var pts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+        for (var i = 0; i < 4; i++) {
+          var p = n.worldPoint(pts[i][0], pts[i][1]);
+          if (!isFinite(p.x) || !isFinite(p.y)) return true;
+          any = true;
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+        return true;
+      }, opts);
+      return any ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null;
+    },
+
+    /* every node whose own world box overlaps a world rectangle. One walk, one
+       transform per node — asking each node for its subtree bounds here would
+       be quadratic on a wide tree, which is exactly the sort of thing that
+       ships and then gets noticed at 3,000 nodes. */
+    query: function (rect) {
+      var out = [];
+      if (!rect) return out;
+      this.walk(function (n) {
+        var b = n.box();
+        if (!b) return true;
+        if (b.x < rect.x + rect.w && b.x + b.w > rect.x && b.y < rect.y + rect.h && b.y + b.h > rect.y) out.push(n);
+        return true;
+      });
+      return out;
+    },
+
+    /* this node's own box in world space (no children), or null if the
+       transform is not finite */
+    box: function () {
+      var hw = (this.w || 0) / 2, hh = (this.h || 0) / 2;
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      var pts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+      for (var i = 0; i < 4; i++) {
+        var p = this.worldPoint(pts[i][0], pts[i][1]);
+        if (!isFinite(p.x) || !isFinite(p.y)) return null;
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+  };
+
+  G.node = function (props) { return new G.Node(props); };
 
 
   /* ---------- code-audio (v1.4) ----------
