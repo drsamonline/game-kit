@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.2.0" };
+  var G = { version: "1.3.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -785,6 +785,210 @@
         }
       };
     }
+  };
+
+  /* =========================================================================
+     G.atlas + G.SpriteBatch — sprite batching, the thing a hand-written
+     renderer gets wrong.
+
+     A canvas `drawImage` per sprite is what makes a small game stutter on a
+     phone: 2,000 sprites is 2,000 draw calls. Batching groups the sprites by
+     the image they come from, so the same 2,000 sprites cost one call per
+     image, and it carries the atlas UVs so a single sprite sheet is enough.
+
+     Four rules, each one a bug this module refuses to have:
+
+     1. A fixed-size buffer NEVER DROPS THE TAIL. Over capacity, the batch
+        spills into a second draw call and `flush().dropped` stays 0. A
+        renderer that silently loses the last 50 sprites is worse than a slow
+        one, because nothing looks broken until the level is busy.
+     2. Draw order is deterministic. Quads sort by `z`, then by the order they
+        were added — an unstable sort that reorders equal `z` values makes a
+        scene flicker frame to frame.
+     3. A frame the atlas does not have is COUNTED, not drawn as garbage: it
+        comes back on the draw call as `missing` and in `flush().missing`.
+     4. Culling is reported. `flush().culled` says how many sprites the
+        viewport removed, so "the screen is empty" is a number and not a guess.
+     ========================================================================= */
+  G.atlas = function (spec) {
+    spec = spec || {};
+    var img = spec.image || { w: 0, h: 0 };
+    var frames = spec.frames || {};
+
+    function frame(name) {
+      var f = frames[name];
+      if (!f) return null;
+      if (Array.isArray(f)) return { x: f[0], y: f[1], w: f[2], h: f[3] };
+      return { x: f.x, y: f.y, w: f.w, h: f.h };
+    }
+
+    /* normalised 0..1 corners, or null when the name is not in the atlas */
+    function uv(name) {
+      var f = frame(name);
+      if (!f || !img.w || !img.h) return null;
+      return {
+        u0: f.x / img.w, v0: f.y / img.h,
+        u1: (f.x + f.w) / img.w, v1: (f.y + f.h) / img.h
+      };
+    }
+
+    return {
+      image: img,
+      frames: frames,
+      frame: frame,
+      uv: uv,
+      names: function () { var out = []; for (var k in frames) if (frames.hasOwnProperty(k)) out.push(k); return out; }
+    };
+  };
+
+  G.SpriteBatch = function (opts) {
+    opts = opts || {};
+    var capacity = opts.capacity > 0 ? opts.capacity : 1024;
+    var atlas = opts.atlas || null;
+    var items = [];
+    var seq = 0;
+    var view = null;
+    var stats = { added: 0, rejected: 0, hidden: 0, culled: 0, missingFrames: 0, spills: 0 };
+
+    function isNum(v) { return typeof v === "number" && isFinite(v); }
+
+    function resetStats() {
+      stats = { added: 0, rejected: 0, hidden: 0, culled: 0, missingFrames: 0, spills: 0 };
+    }
+
+    var B = {
+      atlas: atlas,
+
+      setAtlas: function (a) { atlas = a || null; B.atlas = atlas; return B; },
+      setViewport: function (v) {
+        view = (v && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h) && v.w > 0 && v.h > 0) ? v : null;
+        return B;
+      },
+      capacity: function (c) { if (c > 0) capacity = c; return capacity; },
+      count: function () { return items.length; },
+      stats: function () { var s = {}; for (var k in stats) s[k] = stats[k]; return s; },
+      resetStats: function () { resetStats(); return B; },
+      clear: function () { items = []; return B; },
+      pending: function () { return items.slice(); },
+
+      /* add({ texture, frame|src, x, y, w, h, z, alpha, flipX, visible }) */
+      add: function (r) {
+        stats.added++;
+        if (!r || typeof r !== "object") { stats.rejected++; return B; }
+        if (r.visible === false) { stats.hidden++; return B; }
+
+        var x = r.x, y = r.y, w = r.w, h = r.h;
+        if (!isNum(x) || !isNum(y) || !isNum(w) || !isNum(h) || w <= 0 || h <= 0) {
+          stats.rejected++;
+          return B;
+        }
+
+        var q = {
+          texture: r.texture == null ? "" : String(r.texture),
+          frame: r.frame == null ? null : r.frame,
+          x: x, y: y, w: w, h: h,
+          z: isNum(r.z) ? r.z : 0,
+          alpha: isNum(r.alpha) ? G.clamp(r.alpha, 0, 1) : 1,
+          flipX: !!r.flipX,
+          u0: 0, v0: 0, u1: 1, v1: 1,
+          missing: false,
+          i: seq++
+        };
+
+        var src = r.src || (r.frame != null && atlas ? atlas.frame(r.frame) : null);
+        if (src) {
+          var iw = atlas && atlas.image ? atlas.image.w : 0;
+          var ih = atlas && atlas.image ? atlas.image.h : 0;
+          if (isNum(src.x) && isNum(src.y) && isNum(src.w) && isNum(src.h) && iw > 0 && ih > 0) {
+            q.u0 = src.x / iw; q.v0 = src.y / ih;
+            q.u1 = (src.x + src.w) / iw; q.v1 = (src.y + src.h) / ih;
+          } else {
+            q.missing = true;
+            stats.missingFrames++;
+          }
+        } else if (r.frame != null) {
+          /* a frame name with no atlas to resolve it against */
+          q.missing = true;
+          stats.missingFrames++;
+        }
+
+        items.push(q);
+        return B;
+      },
+
+      /* turn what was added into draw calls, then empty the buffer.
+         returns { calls, quads, culled, spilled, missing, textures, dropped } */
+      flush: function () {
+        var live = [], culled = 0, missing = 0;
+        for (var n = 0; n < items.length; n++) {
+          var q = items[n];
+          if (view && (q.x >= view.x + view.w || q.x + q.w <= view.x ||
+                       q.y >= view.y + view.h || q.y + q.h <= view.y)) {
+            culled++;
+            continue;
+          }
+          live.push(q);
+        }
+
+        /* group by texture, in the order each texture first appears, so the
+           draw-call order is stable across frames */
+        var order = [], groups = {};
+        for (var m = 0; m < live.length; m++) {
+          var t = live[m].texture;
+          if (!groups[t]) { groups[t] = []; order.push(t); }
+          groups[t].push(live[m]);
+        }
+
+        var calls = [], quads = 0, spilled = 0;
+        for (var o = 0; o < order.length; o++) {
+          var g = groups[order[o]];
+          /* z first, then insertion order: a stable sort, spelled out */
+          g.sort(function (a, b) { return (a.z - b.z) || (a.i - b.i); });
+          var missInTexture = 0;
+          for (var k = 0; k < g.length; k++) if (g[k].missing) missInTexture++;
+          for (var s = 0; s < g.length; s += capacity) {
+            var slice = g.slice(s, s + capacity);
+            if (s > 0) spilled++;
+            calls.push({
+              texture: order[o],
+              quads: slice,
+              missing: missInTexture
+            });
+            quads += slice.length;
+          }
+        }
+
+        missing = 0;
+        for (var d = 0; d < live.length; d++) if (live[d].missing) missing++;
+
+        stats.culled += culled;
+        stats.spills += spilled;
+        items = [];
+
+        return {
+          calls: calls,
+          quads: quads,
+          culled: culled,
+          spilled: spilled,
+          missing: missing,
+          textures: order.length,
+          dropped: live.length - quads
+        };
+      },
+
+      /* walk the draw calls in order — one function per texture, not per sprite.
+         paint(result, (call, quad) => ...) */
+      paint: function (result, fn) {
+        var res = result || { calls: [] };
+        for (var i = 0; i < res.calls.length; i++) {
+          var call = res.calls[i];
+          for (var j = 0; j < call.quads.length; j++) fn(call, call.quads[j], i, j);
+        }
+        return res.calls.length;
+      }
+    };
+
+    return B;
   };
 
   root.Game = G;

@@ -346,6 +346,112 @@ try {
   ok("tiled: a custom solid test is honoured", custom.length === 1);
 }
 
+
+/* ---------- v1.3: atlas + sprite batching ---------- */
+{
+  const atlas = G.atlas({
+    image: { w: 64, h: 64 },
+    frames: {
+      grass: [0, 0, 16, 16],
+      wall: { x: 16, y: 0, w: 16, h: 32 }
+    }
+  });
+
+  const uv = atlas.uv("grass");
+  ok("atlas: a frame normalises to 0..1 corners",
+     uv.u0 === 0 && uv.v0 === 0 && Math.abs(uv.u1 - 0.25) < 1e-9 && Math.abs(uv.v1 - 0.25) < 1e-9,
+     JSON.stringify(uv));
+  ok("atlas: the object frame form is accepted", atlas.frame("wall").h === 32);
+  ok("atlas: an unknown frame is null, not garbage", atlas.frame("nope") === null && atlas.uv("nope") === null);
+  ok("atlas: names() lists every frame", atlas.names().sort().join(",") === "grass,wall");
+
+  // one call per texture, not per sprite
+  const b = G.SpriteBatch({ capacity: 1024, atlas });
+  b.add({ texture: "tiles", frame: "grass", x: 0, y: 0, w: 16, h: 16 });
+  b.add({ texture: "tiles", frame: "wall", x: 16, y: 0, w: 16, h: 16 });
+  b.add({ texture: "hero", frame: "grass", x: 32, y: 0, w: 16, h: 16 });
+  ok("batch: three sprites from two images make TWO draw calls", b.count() === 3);
+  let r = b.flush();
+  ok("batch: two textures -> two calls", r.calls.length === 2 && r.textures === 2, r.calls.length + " calls");
+  ok("batch: every sprite is in a call", r.quads === 3);
+  ok("batch: NOTHING is dropped", r.dropped === 0);
+  ok("batch: the atlas UV is carried onto the quad",
+     Math.abs(r.calls[0].quads[0].u1 - 0.25) < 1e-9);
+  ok("batch: flush empties the buffer", b.count() === 0 && b.flush().quads === 0);
+
+  // the fixed-size buffer must not drop the tail
+  const big = G.SpriteBatch({ capacity: 100 });
+  for (let i = 0; i < 250; i++) big.add({ texture: "tiles", x: i, y: 0, w: 8, h: 8 });
+  const bigR = big.flush();
+  ok("batch: 250 sprites over capacity 100 still all arrive", bigR.quads === 250, bigR.quads + " quads");
+  ok("batch: over capacity it SPILLS into more calls", bigR.calls.length === 3 && bigR.spilled === 2);
+  ok("batch: and reports zero dropped", bigR.dropped === 0);
+
+  // draw order: z, then insertion order
+  const ord = G.SpriteBatch();
+  ord.add({ texture: "t", x: 0, y: 0, w: 1, h: 1, z: 5, frame: null });
+  ord.add({ texture: "t", x: 1, y: 0, w: 1, h: 1, z: 1 });
+  ord.add({ texture: "t", x: 2, y: 0, w: 1, h: 1, z: 1 });
+  const ordR = ord.flush();
+  ok("batch: quads sort by z", ordR.calls[0].quads[0].z === 1 && ordR.calls[0].quads[2].z === 5);
+  ok("batch: equal z keeps insertion order (a stable sort)",
+     ordR.calls[0].quads[0].x === 1 && ordR.calls[0].quads[1].x === 2,
+     JSON.stringify(ordR.calls[0].quads.map(q => q.x)));
+
+  // a frame the atlas does not have is counted, never drawn as garbage
+  const miss = G.SpriteBatch({ atlas });
+  miss.add({ texture: "tiles", frame: "typo", x: 0, y: 0, w: 16, h: 16 });
+  miss.add({ texture: "tiles", frame: "grass", x: 16, y: 0, w: 16, h: 16 });
+  const missR = miss.flush();
+  ok("batch: a missing frame is COUNTED", missR.missing === 1 && miss.stats().missingFrames === 1);
+  ok("batch: the missing one is flagged on its quad", missR.calls[0].quads.some(q => q.missing === true));
+  const noAtlas = G.SpriteBatch();
+  noAtlas.add({ texture: "t", frame: "grass", x: 0, y: 0, w: 4, h: 4 });
+  ok("batch: a frame name with no atlas is missing, not silently full-sheet",
+     noAtlas.flush().missing === 1);
+
+  // bad input is refused and counted, never rendered
+  const bad = G.SpriteBatch();
+  bad.add({ texture: "t", x: NaN, y: 0, w: 4, h: 4 });
+  bad.add({ texture: "t", x: 0, y: 0, w: 0, h: 4 });
+  bad.add({ texture: "t", x: 0, y: 0, w: 4, h: 4, visible: false });
+  bad.add(null);
+  bad.add({ texture: "t", x: 0, y: 0, w: 4, h: 4, alpha: 5 });
+  const badR = bad.flush();
+  ok("batch: a non-finite position is rejected", bad.stats().rejected === 3, JSON.stringify(bad.stats()));
+  ok("batch: a hidden sprite is not drawn but is counted", badR.quads === 1 && bad.stats().hidden === 1);
+  ok("batch: alpha is clamped to 1", badR.calls[0].quads[0].alpha === 1);
+
+  // viewport culling is reported, and keeps the partial
+  const cul = G.SpriteBatch();
+  cul.add({ texture: "t", x: 0, y: 0, w: 10, h: 10 });       // inside
+  cul.add({ texture: "t", x: 95, y: 0, w: 10, h: 10 });      // straddles the edge
+  cul.add({ texture: "t", x: 500, y: 500, w: 10, h: 10 });   // off screen
+  cul.setViewport({ x: 0, y: 0, w: 100, h: 100 });
+  const culR = cul.flush();
+  ok("batch: an off-screen sprite is culled, a straddling one is kept",
+     culR.quads === 2 && culR.culled === 1, JSON.stringify({ q: culR.quads, c: culR.culled }));
+  ok("batch: culling accumulates in stats", cul.stats().culled === 1);
+
+  // the point of the module: many sprites, few calls
+  const many = G.SpriteBatch({ capacity: 4096 });
+  const names = ["tiles", "hero", "fx", "ui"];
+  for (let i = 0; i < 2000; i++) many.add({ texture: names[i % 4], x: i, y: 0, w: 8, h: 8 });
+  const manyR = many.flush();
+  ok("batch: 2,000 sprites cost 4 draw calls, not 2,000",
+     manyR.calls.length === 4 && manyR.quads === 2000, manyR.calls.length + " calls");
+
+  // paint walks every quad, in call order
+  let visited = 0;
+  const callsSeen = many.paint(manyR, () => visited++);
+  ok("batch: paint visits every quad", visited === 2000 && callsSeen === 4);
+
+  const cl = G.SpriteBatch();
+  cl.add({ texture: "t", x: 0, y: 0, w: 1, h: 1 });
+  cl.clear();
+  ok("batch: clear drops what was pending", cl.count() === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

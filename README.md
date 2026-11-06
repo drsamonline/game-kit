@@ -26,9 +26,29 @@ engine every small browser game was re-implementing, extracted once from
 - **seeded 3-D noise and terrain** *(v1.2)* — the same seed rebuilds the same world;
 - a **Tiled map reader** *(v1.2)* — reads the Tiled editor's own JSON, with `collisionRects()` merging solid tiles into as few bodies as possible;
 - a **world-to-map view** *(v1.2)* — a voxel world rendered top-down as tiles.
+- **sprite batching** *(v1.3)* — `Game.atlas` + `Game.SpriteBatch`: sprites grouped by image, so 2,000 sprites cost 4 draw calls; a fixed buffer that **spills instead of dropping the tail**, a stable `z` order, and culling/misses you can count.
 
 Every one of those exists because a shipped game got it wrong first. The stories are in
 [**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — ten rules, each tied to the bug that taught it.
+
+## Sprite batching *(v1.3)*
+
+```js
+const atlas = Game.atlas({ image: { w: 256, h: 256 },
+  frames: { grass: [0, 0, 16, 16], hero: [16, 0, 16, 32] } });
+
+const batch = Game.SpriteBatch({ capacity: 1024, atlas });
+batch.setViewport({ x: cam.x, y: cam.y, w: 800, h: 600 });   // cull off-screen
+batch.add({ texture: "tiles", frame: "grass", x: 32, y: 64, w: 16, h: 16, z: 0 });
+batch.add({ texture: "tiles", frame: "hero",  x: 48, y: 64, w: 16, h: 32, z: 1 });
+
+const r = batch.flush();
+// r.calls -> one entry per image (and per capacity spill); r.dropped is always 0
+r.calls.forEach(c => { ctx.drawImage(sheet[c.texture], 0, 0); c.quads.forEach(q => draw(q)); });
+```
+
+A frame the atlas does not have is **counted** (`r.missing`), never drawn as the whole
+sheet. Over capacity the batch spills into another call rather than losing the tail.
 
 ## Voxels and tilemaps *(v1.2)*
 
