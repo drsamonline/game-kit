@@ -27,9 +27,39 @@ engine every small browser game was re-implementing, extracted once from
 - a **Tiled map reader** *(v1.2)* — reads the Tiled editor's own JSON, with `collisionRects()` merging solid tiles into as few bodies as possible;
 - a **world-to-map view** *(v1.2)* — a voxel world rendered top-down as tiles.
 - **sprite batching** *(v1.3)* — `Game.atlas` + `Game.SpriteBatch`: sprites grouped by image, so 2,000 sprites cost 4 draw calls; a fixed buffer that **spills instead of dropping the tail**, a stable `z` order, and culling/misses you can count.
+- **code-audio** *(v1.4)* — `Game.audio`: pitches from names, seeded oscillators, ADSR that cannot click, a pattern grid (`bpm` + `seq`) rendered to a `Float32Array`, five SFX presets as data, and `play(ctx, samples)` as the only browser-dependent line. **Game music is patterns, not files.**
 
 Every one of those exists because a shipped game got it wrong first. The stories are in
-[**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — ten rules, each tied to the bug that taught it.
+[**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — eleven rules, each tied to the bug that taught it.
+
+## Code-audio *(v1.4)*
+
+```js
+const ctx = new AudioContext();
+
+// a sound effect is a pattern
+const jump = Game.audio.sfx("jump");                       // { duration, notes }
+Game.audio.play(ctx, Game.audio.render(jump));
+
+// a level theme is a grid, not a file
+const theme = Game.audio.track({
+  bpm: 132, stepsPerBeat: 4, wave: "square", gain: 0.35,
+  seq: ["C5", null, "E5", "G5", null, "E5", { note: "C5", len: 2 }, null,
+        "A4", null, "C5", "E5", null, "C5", { note: "A4", len: 2 }, null]
+});
+const samples = Game.audio.render({ notes: theme.notes, duration: theme.duration, seed: 3 });
+Game.audio.stats(samples);   // { peak: 1, rms, nonFinite: 0, silent: false }
+
+// loop it forever, from bytes you already had
+const buffer = ctx.createBuffer(1, samples.length, 44100);
+buffer.getChannelData(0).set(samples);
+```
+
+Every note starts at 0 and ends at 0, because the renderer enforces a minimum
+attack and release even when the pattern asks for none. A summed chord is
+normalised to a peak of 1 rather than wrapping, and a long release is clamped so it
+cannot silence the note it belongs to. Noise is seeded, so the same seed is the
+same hit in the test and in the game.
 
 ## Sprite batching *(v1.3)*
 

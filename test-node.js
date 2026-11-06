@@ -452,6 +452,137 @@ try {
   ok("batch: clear drops what was pending", cl.count() === 0);
 }
 
+/* ---- v1.4: code-audio — patterns to samples, headless ---- */
+(function audioTests() {
+  const A = G.audio;
+
+  // pitch: a name, not a lookup table that is wrong past one octave
+  ok("audio: A4 is 440", A.freq("A4") === 440);
+  ok("audio: C4 is 261.63", Math.abs(A.freq("C4") - 261.6255653005986) < 1e-9);
+  ok("audio: a sharp and its flat are the same pitch",
+     Math.abs(A.freq("C#4") - A.freq("Db4")) < 1e-9);
+  ok("audio: a flat below C is read as B of the octave below",
+     Math.abs(A.freq("Bb3") - 233.08188075904496) < 1e-9);
+  ok("audio: an unreadable name is null, never NaN or a 0 Hz drone",
+     A.freq("H4") === null && A.freq("") === null && A.freq(null) === null && A.freq(0) === null);
+  ok("audio: midi 69 is A4", A.midi(69) === 440);
+
+  // waves are pure and bounded
+  ok("audio: square is +-1", A.waves.square(0.25) === 1 && A.waves.square(0.75) === -1);
+  ok("audio: saw runs -1..1", A.waves.saw(0) === -1 && Math.abs(A.waves.saw(0.999) - 0.998) < 1e-9);
+  ok("audio: triangle peaks at half phase", A.waves.triangle(0.5) === 1 && A.waves.triangle(0) === -1);
+  ok("audio: sine quarter phase is 1", Math.abs(A.waves.sine(0.25) - 1) < 1e-9);
+
+  // the click: a note starts at 0 and ends at 0
+  const sr = 8000;
+  const one = A.render({ sampleRate: sr, duration: 0.2,
+    notes: [{ note: "A4", dur: 0.19, wave: "square", gain: 0.5 }] });
+  ok("audio: a note starts at exactly 0 (no click)", one[0] === 0);
+  ok("audio: a note is silent at its last sample (no click)",
+     Math.abs(one[one.length - 1]) < 1e-6 && Math.abs(one[one.length - 2]) < 1e-3,
+     one[one.length - 1]);
+
+  // the renderer enforces the edges itself: a pattern that asks for a zero
+  // attack and a zero release still cannot click
+  const raw = A.render({ sampleRate: sr, duration: 0.2,
+    notes: [{ note: "A4", dur: 0.19, wave: "square", gain: 0.9, attack: 0, release: 0 }] });
+  ok("audio: a zero attack and a zero release are still declicked",
+     raw[0] === 0 && Math.abs(raw[raw.length - 1]) < 1e-6,
+     raw[0] + " / " + raw[raw.length - 1]);
+
+  // the envelope is a function of (t, dur), and it ends at 0 inside the note
+  const e = A.env({ attack: 0.01, decay: 0.02, sustain: 0.5, release: 0.05 });
+  ok("audio: envelope starts at 0 and peaks at the attack", e(0, 0.2) === 0 && Math.abs(e(0.01, 0.2) - 1) < 1e-9);
+  ok("audio: envelope is 0 at and past the note's end", e(0.2, 0.2) === 0 && e(0.3, 0.2) === 0);
+  ok("audio: a note held past its sustain still releases inside itself",
+     e(0.1999, 0.2) < 0.01 && e(0.19, 0.2) > 0 && e(0.19, 0.2) < 0.5);
+  ok("audio: a long release cannot silence the middle of the note",
+     A.env({ attack: 0.001, decay: 0.001, sustain: 0.8, release: 5 })(0.1, 0.2) > 0.25,
+     A.env({ release: 5 })(0.1, 0.2));
+
+  // a busy bar gets quieter, it does not fold over
+  const loud = A.render({ sampleRate: sr, duration: 0.3, notes: [
+    { note: "C3", dur: 0.28, gain: 0.9 }, { note: "E3", dur: 0.28, gain: 0.9 },
+    { note: "G3", dur: 0.28, gain: 0.9 }, { note: "C4", dur: 0.28, gain: 0.9 },
+    { note: "E4", dur: 0.28, gain: 0.9 }, { note: "G4", dur: 0.28, gain: 0.9 },
+    { note: "C5", dur: 0.28, gain: 0.9 }, { note: "E5", dur: 0.28, gain: 0.9 }] });
+  const loudStats = A.stats(loud);
+  ok("audio: a summed chord never exceeds a peak of 1", loudStats.peak <= 1 + 1e-6 && loudStats.peak > 0.99,
+     loudStats.peak);
+  ok("audio: no sample is NaN or infinite", loudStats.nonFinite === 0);
+  const quiet = A.render({ sampleRate: sr, duration: 0.2, notes: [{ note: "A4", dur: 0.18, gain: 0.2 }] });
+  ok("audio: a quiet note is not silently boosted to full scale", A.stats(quiet).peak < 0.25);
+
+  // bad input is silence, not a crash and not noise
+  const badPitch = A.render({ sampleRate: sr, duration: 0.1, notes: [{ note: "nope", dur: 0.09 }] });
+  ok("audio: an unreadable pitch renders silence", A.stats(badPitch).silent === true);
+  const badAt = A.render({ sampleRate: sr, duration: 0.1,
+    notes: [{ note: "C4", at: NaN, dur: NaN }, null, "not a note"] });
+  ok("audio: a NaN position or a junk note does not poison the buffer",
+     A.stats(badAt).nonFinite === 0);
+
+  // the sample count is arithmetic, not a guess
+  ok("audio: 0.5s at 8000 Hz is 4000 samples",
+     A.render({ sampleRate: sr, duration: 0.5, notes: [] }).length === 4000);
+  ok("audio: duration is derived from the notes when not given",
+     A.render({ sampleRate: sr, notes: [{ note: "C4", at: 0.1, dur: 0.1 }] }).length === Math.round(0.2 * sr));
+
+  // the grid is the music
+  const t = A.track({ bpm: 120, stepsPerBeat: 4, seq: ["C4", null, "E4", { note: "G4", len: 2 }] });
+  ok("audio: a 120 bpm 1/16 step is 0.125s", Math.abs(t.stepDur - 0.125) < 1e-12);
+  ok("audio: a rest is a rest and a note lands on its step",
+     t.notes.length === 3 && t.notes[0].at === 0 && Math.abs(t.notes[1].at - 0.25) < 1e-12);
+  ok("audio: a note is shorter than its step, so repeats articulate",
+     t.notes[0].dur < t.stepDur);
+  ok("audio: a two-step note is longer than a one-step note",
+     t.notes[2].dur > t.notes[0].dur);
+  ok("audio: the track renders to its own length",
+     Math.abs(A.stats(A.render({ sampleRate: sr, duration: t.duration, notes: t.notes })).samples -
+              Math.round(t.duration * sr)) === 0);
+
+  // determinism: the same seed is the same hit, twice
+  const n1 = A.render({ sampleRate: sr, duration: 0.1, seed: 9, notes: [{ freq: 100, dur: 0.09, wave: "noise" }] });
+  const n2 = A.render({ sampleRate: sr, duration: 0.1, seed: 9, notes: [{ freq: 100, dur: 0.09, wave: "noise" }] });
+  const n3 = A.render({ sampleRate: sr, duration: 0.1, seed: 10, notes: [{ freq: 100, dur: 0.09, wave: "noise" }] });
+  ok("audio: seeded noise is the same twice", JSON.stringify(Array.from(n1)) === JSON.stringify(Array.from(n2)));
+  ok("audio: a different seed is a different hit",
+     JSON.stringify(Array.from(n1)) !== JSON.stringify(Array.from(n3)));
+
+  // glide is a pitch change, and it is measurable
+  const gl = A.render({ sampleRate: sr, duration: 0.5,
+    notes: [{ note: "A3", dur: 0.5, wave: "sine", glide: 4, gain: 0.5 }] });
+  let firstHalf = 0, secondHalf = 0;
+  for (let i = 1; i < gl.length; i++) {
+    if ((gl[i - 1] < 0) !== (gl[i] < 0)) { i < gl.length / 2 ? firstHalf++ : secondHalf++; }
+  }
+  ok("audio: a glide upwards crosses zero more often later", secondHalf > firstHalf * 1.5,
+     firstHalf + " -> " + secondHalf);
+
+  // the presets are data
+  const coinNotes = A.sfx("coin").notes;
+  ok("audio: coin is two rising notes",
+     coinNotes.length === 2 && A.freq(coinNotes[1].note) > A.freq(coinNotes[0].note));
+  ok("audio: an unknown sfx is null, never a random noise burst", A.sfx("nope") === null);
+  const coin = A.render(Object.assign({ sampleRate: sr }, A.sfx("coin")));
+  ok("audio: every preset renders audible, unclipped sound",
+     !A.stats(coin).silent && A.stats(coin).peak <= 1 + 1e-6 &&
+     Object.keys(A.presets).every(k => {
+       const r = A.stats(A.render(Object.assign({ sampleRate: sr }, A.sfx(k))));
+       return !r.silent && r.peak <= 1 + 1e-6;
+     }));
+
+  // the one browser-dependent function, against a stub context
+  const fake = {
+    sampleRate: 44100,
+    createBuffer: (ch, len) => ({ getChannelData: () => new Float32Array(len) }),
+    createBufferSource: () => ({ connect() {}, start(when) { this.at = when; } }),
+    destination: {}
+  };
+  const src = A.play(fake, coin);
+  ok("audio: play hands the samples to a context", src && src.at === 0);
+  ok("audio: play with no context is null, not a crash", A.play(null, coin) === null);
+})();
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

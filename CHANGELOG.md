@@ -1,3 +1,45 @@
+## [1.4.0]
+
+Code-audio — the last piece of the kit's core, and the three ways a hand-written
+sound engine goes wrong.
+
+### Added
+- **`Game.audio.freq("A4")`** — a pitch from a name (`"C#4"`, `"Bb3"`, `"a4"`), a
+  number passed through, and **`null`** for anything unreadable. `"H4"` is a typo,
+  not a 0 Hz drone that plays as silence and looks like a broken mixer.
+- **`Game.audio.waves`** — `sine`, `square`, `saw`, `triangle` and a **seeded**
+  `noise`, each a pure function of phase in `[0,1)`. No sample files, so a track
+  costs bytes instead of megabytes and works offline.
+- **`Game.audio.env({attack, decay, sustain, release})`** — ADSR as a function of
+  `(t, dur)` rather than an array, so a note can be stretched without re-rendering.
+  It starts at exactly 0, ends at exactly 0, and **the release can never eat the
+  note**: it is clamped to half the duration, so a note held past its sustain still
+  releases inside itself.
+- **`Game.audio.render({sampleRate, duration, notes, seed})`** → `Float32Array`.
+  Notes start and end at zero because the renderer enforces a 1.5 ms minimum attack
+  and release — *a pattern that asks for a zero attack and a zero release still
+  cannot click*. A summed chord is normalised to a peak of 1 instead of wrapping,
+  so a busy bar gets quieter rather than tearing. An unreadable pitch renders
+  silence, and a `NaN` position or a junk note cannot poison the buffer.
+- **`Game.audio.track({bpm, stepsPerBeat, seq})`** — **the grid is the music**. A
+  cell is a rest (`null`), a note name, or `{note, len, wave, gain}`; 120 bpm at
+  4 steps per beat is 0.125 s a step. A note is 90% of its step by default, so
+  repeated notes articulate instead of smearing into one long tone.
+- **`Game.audio.stats(buffer)`** — `peak`, `rms`, `nonFinite`, `silent`: "the sound
+  is silent" is a count, not a guess.
+- **`Game.audio.sfx(name)`** — `blip`, `jump`, `coin`, `hit`, `explode`, written as
+  data. An unknown name is `null`, never a random noise burst.
+- **`Game.audio.play(ctx, samples)`** — the one browser-dependent function, kept to
+  one function: hand it samples and an `AudioContext` and it plays them.
+
+### Verified
+`node test-node.js` — **178 assertions, 0 failing** (37 new). Checked to bite five
+ways: setting the declick minimum to 0 fails the zero-attack/zero-release test,
+removing the normalise fails the summed-chord peak, unclamping the release fails
+"a long release cannot silence the middle of the note", removing the 90%
+articulation gap fails "a note is shorter than its step", and dropping the octave
+offset from the pitch parser fails three (A4 is 440, C4 is 261.63, Bb3).
+
 ## [1.3.0]
 
 Sprite batching — the renderer half of the kit, and the three ways a hand-written

@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.3.0" };
+  var G = { version: "1.4.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -990,6 +990,254 @@
 
     return B;
   };
+
+
+  /* ---------- code-audio (v1.4) ----------
+     Game music is PATTERNS, not files. A pattern is data — a wave, a list of
+     steps, a pitch — and this module turns it into samples with plain
+     arithmetic, so all of it is testable headless: no AudioContext, no .wav,
+     no asset to 404, and a track costs bytes instead of megabytes.
+
+     The three bugs it refuses to have:
+       1. A CLICK. Every note starts at exactly 0 and ends at exactly 0, because
+          the envelope is evaluated per sample and the renderer enforces a
+          minimum attack and release. "The sound is crunchy" is a missing 3 ms.
+       2. A WRAPPING SUM. Notes are summed in float and the buffer is normalised
+          to a peak of 1, so a busy bar gets quieter instead of folding over into
+          a tearing noise.
+       3. A NOTE THAT NEVER RELEASES. A note held past its sustain releases
+          inside its own duration and is silent at the last sample. Getting this
+          wrong is what "the last note of the level is cut off" sounds like.
+  */
+  G.audio = (function () {
+    var TWO_PI = Math.PI * 2;
+    var SEMI = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+
+    /* a pitch from a name: "A4" -> 440, "C#4", "Bb3", "a4"; a number passes
+       through; anything unreadable is null, never NaN or a 0 Hz drone */
+    function freq(name) {
+      if (typeof name === "number") return name > 0 && isFinite(name) ? name : null;
+      if (typeof name !== "string") return null;
+      var m = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(name.trim());
+      if (!m) return null;
+      var semi = SEMI[m[1].toLowerCase()] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0);
+      var midi = (parseInt(m[3], 10) + 1) * 12 + semi;
+      return 440 * Math.pow(2, (midi - 69) / 12);
+    }
+    function midi(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+
+    /* waves are pure functions of phase in [0,1) plus a seeded rng, so a hit
+       sounds the same in the test and in the game */
+    var waves = {
+      sine: function (p) { return Math.sin(TWO_PI * p); },
+      square: function (p) { return p < 0.5 ? 1 : -1; },
+      saw: function (p) { return 2 * p - 1; },
+      triangle: function (p) { return 1 - 4 * Math.abs(p - 0.5); },
+      noise: function (p, rnd) { return rnd() * 2 - 1; }
+    };
+
+    /* ADSR as a function of (t, dur), not an array: a note is asked for its
+       level at a time, so a note can be stretched without re-rendering */
+    function env(o) {
+      o = o || {};
+      var a = o.attack == null ? 0.005 : Math.max(0, o.attack);
+      var d = o.decay == null ? 0.05 : Math.max(0, o.decay);
+      var s = o.sustain == null ? 0.7 : Math.max(0, Math.min(1, o.sustain));
+      var r = o.release == null ? 0.06 : Math.max(0, o.release);
+      return function (t, dur) {
+        if (!(dur > 0) || !(t >= 0) || t >= dur) return 0;
+        var rel = Math.min(r, dur * 0.5);        // the release can never eat the note
+        var held = dur - rel;                     // the sustain ends here
+        var att = Math.min(a, held);
+        var dec = Math.min(d, held - att);
+        if (att > 0 && t < att) return t / att;   // starts at exactly 0
+        if (dec > 0 && t < att + dec) return 1 - (1 - s) * ((t - att) / dec);
+        if (t < held) return s;
+        return s * (1 - (t - held) / rel);        // ends at exactly 0
+      };
+    }
+
+    /* render a pattern to samples. opts: { sampleRate, duration, notes, seed }.
+       A note is { freq|note, at, dur, wave, gain, attack, decay, sustain,
+       release, glide } where glide is the pitch RATIO at the end of the note. */
+    function render(opts) {
+      opts = opts || {};
+      var sr = opts.sampleRate > 0 ? opts.sampleRate : 44100;
+      var notes = opts.notes || [];
+      var duration = opts.duration > 0 ? opts.duration : 0;
+      var i, k;
+      if (!duration) {
+        for (i = 0; i < notes.length; i++) {
+          var end = (notes[i] && notes[i].at > 0 ? notes[i].at : 0) +
+                    (notes[i] && notes[i].dur > 0 ? notes[i].dur : 0);
+          if (end > duration) duration = end;
+        }
+      }
+      if (!(duration > 0)) duration = 0.001;
+      var n = Math.max(1, Math.round(duration * sr));
+      var buf = new Float32Array(n);
+      var seed = opts.seed == null ? 1 : opts.seed;
+      var minEdge = Math.min(0.0015, duration / 8);   // 1.5 ms of declick
+
+      for (k = 0; k < notes.length; k++) {
+        var note = notes[k];
+        if (!note || typeof note !== "object") continue;
+        var f0 = note.freq != null ? freq(note.freq) : freq(note.note);
+        if (!(f0 > 0)) continue;                       // unreadable pitch is silent
+        var dur = note.dur > 0 && isFinite(note.dur) ? note.dur : 0.2;
+        var at = note.at > 0 && isFinite(note.at) ? note.at : 0;
+        var gain = note.gain == null ? 0.5 : Math.max(0, note.gain);
+        var wave = waves[note.wave] || waves.sine;
+        var f1 = note.glide > 0 ? f0 * note.glide : f0;
+        var level = env({
+          attack: Math.max(note.attack == null ? 0.005 : note.attack, minEdge),
+          decay: note.decay == null ? 0.05 : note.decay,
+          sustain: note.sustain,
+          release: Math.max(note.release == null ? 0.06 : note.release, minEdge)
+        });
+        var s0 = Math.round(at * sr);
+        var len = Math.round(dur * sr);
+        var rnd = G.rng(seed + k * 7919);
+        var phase = 0;
+        for (var j = 0; j < len; j++) {
+          var idx = s0 + j;
+          if (idx >= n) break;
+          var t = j / sr;
+          var f = f1 === f0 ? f0 : f0 * Math.pow(f1 / f0, dur > 0 ? t / dur : 1);
+          phase += f / sr;
+          if (phase >= 1) phase -= Math.floor(phase);
+          buf[idx] += wave(phase, rnd) * level(t, dur) * gain;
+        }
+      }
+
+      /* never wrap: normalise to a peak of 1, and a NaN can never leave here */
+      var peak = 0, q, v, av;
+      for (q = 0; q < n; q++) {
+        v = buf[q];
+        if (!isFinite(v)) { buf[q] = 0; continue; }
+        av = v < 0 ? -v : v;
+        if (av > peak) peak = av;
+      }
+      if (peak > 1) { var scale = 1 / peak; for (q = 0; q < n; q++) buf[q] *= scale; }
+      return buf;
+    }
+
+    /* the numbers a test (or a HUD) can assert on: "the screen is empty" and
+       "the sound is silent" should both be counts, not guesses */
+    function stats(buf) {
+      var peak = 0, sum = 0, bad = 0, i, v, av;
+      var len = buf && buf.length ? buf.length : 0;
+      for (i = 0; i < len; i++) {
+        v = buf[i];
+        if (!isFinite(v)) { bad++; continue; }
+        av = v < 0 ? -v : v;
+        if (av > peak) peak = av;
+        sum += v * v;
+      }
+      return {
+        samples: len,
+        seconds: len ? len / 44100 : 0,
+        peak: peak,
+        rms: len ? Math.sqrt(sum / len) : 0,
+        nonFinite: bad,
+        silent: peak === 0
+      };
+    }
+
+    /* a pattern -> notes. A cell is null (a rest), a note name, or an object
+       { note|freq, len, wave, gain, dur }. The grid is the music. */
+    function track(o) {
+      o = o || {};
+      var bpm = o.bpm > 0 ? o.bpm : 120;
+      var per = o.stepsPerBeat > 0 ? o.stepsPerBeat : 4;
+      var stepDur = 60 / bpm / per;
+      var seq = o.seq || [];
+      var notes = [];
+      for (var i = 0; i < seq.length; i++) {
+        var cell = seq[i];
+        if (!cell) continue;                                  // a rest is a rest
+        if (typeof cell === "string" || typeof cell === "number") cell = { note: cell };
+        var f = cell.freq != null ? freq(cell.freq) : freq(cell.note);
+        if (!(f > 0)) continue;
+        var len = cell.len > 0 ? cell.len : 1;
+        notes.push({
+          freq: f,
+          at: i * stepDur,
+          dur: cell.dur > 0 ? cell.dur : stepDur * len * 0.9,   // a gap, so repeated notes articulate
+          wave: cell.wave || o.wave || "square",
+          gain: cell.gain == null ? (o.gain == null ? 0.4 : o.gain) : cell.gain,
+          attack: cell.attack,
+          decay: cell.decay,
+          sustain: cell.sustain,
+          release: cell.release
+        });
+      }
+      return {
+        bpm: bpm,
+        stepsPerBeat: per,
+        stepDur: stepDur,
+        duration: seq.length * stepDur,
+        notes: notes
+      };
+    }
+
+    /* the five sounds every small game needs, written as data — an unknown
+       name is null, never a random noise burst */
+    var presets = {
+      blip: function () {
+        return { duration: 0.09, notes: [{ note: "A5", dur: 0.07, wave: "square", gain: 0.35 }] };
+      },
+      jump: function () {
+        return { duration: 0.18, notes: [{ note: "C5", dur: 0.16, wave: "square", gain: 0.35, glide: 2 }] };
+      },
+      coin: function () {
+        return { duration: 0.2, notes: [
+          { note: "B5", at: 0, dur: 0.06, wave: "square", gain: 0.3 },
+          { note: "E6", at: 0.06, dur: 0.12, wave: "square", gain: 0.3 }
+        ] };
+      },
+      hit: function () {
+        return { duration: 0.12, notes: [
+          { freq: 140, dur: 0.1, wave: "noise", gain: 0.5, decay: 0.03, sustain: 0.1, release: 0.05 }
+        ] };
+      },
+      explode: function () {
+        return { duration: 0.7, notes: [
+          { freq: 90, dur: 0.65, wave: "noise", gain: 0.6, decay: 0.1, sustain: 0.5, release: 0.3 },
+          { freq: 60, dur: 0.5, wave: "sine", gain: 0.4, glide: 0.5 }
+        ] };
+      }
+    };
+    function sfx(name) { return presets[name] ? presets[name]() : null; }
+
+    /* the only browser-dependent part, kept to one function: hand it samples
+       and a context and it plays them */
+    function play(ctx, samples, opts) {
+      if (!ctx || typeof ctx.createBuffer !== "function" || !samples || !samples.length) return null;
+      opts = opts || {};
+      var sr = opts.sampleRate > 0 ? opts.sampleRate : (ctx.sampleRate > 0 ? ctx.sampleRate : 44100);
+      var b = ctx.createBuffer(1, samples.length, sr);
+      b.getChannelData(0).set(samples);
+      var src = ctx.createBufferSource();
+      src.buffer = b;
+      if (src.connect) src.connect(opts.destination || ctx.destination);
+      if (src.start) src.start(opts.when || 0);
+      return src;
+    }
+
+    return {
+      freq: freq,
+      midi: midi,
+      waves: waves,
+      env: env,
+      render: render,
+      stats: stats,
+      track: track,
+      sfx: sfx,
+      presets: presets,
+      play: play
+    };
+  })();
 
   root.Game = G;
 })(typeof globalThis !== "undefined" ? globalThis : this);

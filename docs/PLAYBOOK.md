@@ -113,3 +113,11 @@ nothing. Count the thing you are optimising, or you are guessing.
 Three bugs in one session were caught only because a test asserted something *negative*: "no
 exceptions", "no overflow", "no duplicate keys". A test that records failures and prints them will
 happily report none while the feature is broken.
+
+## 11. A click is a missing 3 ms
+
+Every note that starts or ends at a non-zero amplitude clicks, and every hand-written
+sound engine starts that way. The cure is not "add a fade" in the caller — it is the
+renderer refusing to output a hard edge: `Game.audio.render` enforces a 1.5 ms minimum
+attack and release, so a pattern that asks for `attack: 0, release: 0` still cannot
+click. Enforce the invariant where the samples are made, not where they are asked for.
