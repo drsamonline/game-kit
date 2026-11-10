@@ -719,6 +719,40 @@ try {
   ok("scene: returning false prunes a subtree", pruned === 3 && visited.join(",") === "l,a,b" && visited.indexOf("c") < 0);
 })();
 
+
+/* ---------- ECS: change detection ---------- */
+{
+  const w = G.ECS();
+  const a = w.create({ pos: { x: 0 }, vel: { x: 1 } });
+  ok("ecs: the tick starts at 0", w.tick() === 0);
+  ok("ecs: a create stamps its components at tick 0", w.changed(a, "pos", 0) && w.changed(a, "vel", 0));
+  ok("ecs: an unstamped component is not changed", !w.changed(a, "hp", 0));
+
+  w.update(1 / 60);
+  ok("ecs: update advances the tick", w.tick() === 1);
+  ok("ecs: nothing changed during an empty update", !w.changed(a, "pos", 1));
+
+  w.set(a, "pos", { x: 5 });
+  ok("ecs: set stamps at the current tick", w.changed(a, "pos", 1));
+  ok("ecs: and not the untouched one", !w.changed(a, "vel", 1));
+  ok("ecs: changes() names what moved", JSON.stringify(w.changes(1)) === JSON.stringify({ [a]: ["pos"] }));
+  ok("ecs: a stamp is visible from an earlier tick", w.changed(a, "vel", 0));
+
+  w.remove(a, "pos");
+  ok("ecs: removing clears the stamp", !w.changed(a, "pos", 0));
+
+  const w2 = G.ECS();
+  const b = w2.create({ pos: { x: 0 } });
+  w2.commands.destroy(b);
+  w2.flush();
+  ok("ecs: a destroyed entity has no stamps", !w2.changed(b, "pos", 0) && w2.count() === 0);
+
+  const w3 = G.ECS();
+  w3.create({ pos: {} });
+  w3.update(1 / 60);
+  ok("ecs: changes() is empty after an idle tick", JSON.stringify(w3.changes(w3.tick())) === "{}");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

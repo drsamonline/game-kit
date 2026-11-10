@@ -130,12 +130,16 @@
      be tested on its own. */
   G.ECS = function () {
     var next = 1, entities = {}, systems = [], queue = [], flushing = false;
+    /* Change detection: a write stamps the component with the current tick, so a
+       renderer or a network layer can ask "what changed since tick N" instead of
+       diffing every value. The tick advances once per update(). */
+    var tick = 0, stamps = {};   /* stamps[id][name] = tick of the last write */
     /* Structural changes made while a system is running are queued, not applied:
        destroying an entity mid-iteration used to mean the caller stepped its own
        index backwards. flush() applies them in order, once, between systems. */
     function apply(cmd) {
       if (cmd.op === "spawn") { api.create(cmd.comps); return; }
-      if (cmd.op === "destroy") { delete entities[cmd.id]; return; }
+      if (cmd.op === "destroy") { delete entities[cmd.id]; delete stamps[cmd.id]; return; }
       if (cmd.op === "add") { api.add(cmd.id, cmd.name, cmd.data); return; }
       if (cmd.op === "remove") { api.remove(cmd.id, cmd.name); }
     }
@@ -148,17 +152,52 @@
       create: function (comps) {
         var id = next++;
         entities[id] = {};
-        if (comps) Object.keys(comps).forEach(function (k) { entities[id][k] = comps[k]; });
+        if (comps) {
+          stamps[id] = {};
+          Object.keys(comps).forEach(function (k) {
+            entities[id][k] = comps[k];
+            stamps[id][k] = tick;      /* a create is a write */
+          });
+        }
         return id;
       },
-      destroy: function (id) { delete entities[id]; return api; },
+      destroy: function (id) { delete entities[id]; delete stamps[id]; return api; },
       add: function (id, name, data) {
         (entities[id] = entities[id] || {})[name] = data === undefined ? {} : data;
+        (stamps[id] = stamps[id] || {})[name] = tick;
         return api;
       },
+      /* Write a component and stamp it. add() does the same; set() is the name to
+         use for a value that changes every frame. */
+      set: function (id, name, data) {
+        return api.add(id, name, data);
+      },
+      /* True if this component was written at or after `since` (default: this tick). */
+      changed: function (id, name, since) {
+        var s = stamps[id];
+        if (!s || !(name in s)) return false;
+        var from = since === undefined ? tick : since;
+        return s[name] >= from;
+      },
+      /* The components written since `since`, as { id: [names] }. */
+      changes: function (since) {
+        var from = since === undefined ? tick : since;
+        var out = {};
+        Object.keys(stamps).forEach(function (id) {
+          var names = Object.keys(stamps[id]).filter(function (n) { return stamps[id][n] >= from; });
+          if (names.length) out[id] = names;
+        });
+        return out;
+      },
+      tick: function () { return tick; },
       get: function (id, name) { var e = entities[id]; return e ? e[name] : undefined; },
       has: function (id, name) { var e = entities[id]; return !!(e && name in e); },
-      remove: function (id, name) { var e = entities[id]; if (e) delete e[name]; return api; },
+      remove: function (id, name) {
+        var e = entities[id];
+        if (e) delete e[name];
+        if (stamps[id]) delete stamps[id][name];
+        return api;
+      },
       ids: function () { return sortedIds(); },
       count: function () { return Object.keys(entities).length; },
       system: function (required, fn) { systems.push({ required: required, fn: fn }); return api; },
@@ -180,6 +219,7 @@
       },
 
       update: function (dt) {
+        tick++;
         systems.forEach(function (s) {
           var ids = sortedIds();          /* a snapshot: spawns land after this system */
           for (var n = 0; n < ids.length; n++) {

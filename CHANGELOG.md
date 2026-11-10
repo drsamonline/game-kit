@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.0 — 2026-11-10
+
+### Added
+- change detection: every write stamps its component with the current tick, `world.set()` is the
+  write for a value that changes per frame, and `world.changed(id, name, since)` /
+  `world.changes(since)` answer what moved. `create()` counts as a write; `remove()` and
+  `destroy()` clear the stamp.
+
+### Verified
+- 226 assertions, including a stamp visible from an earlier tick, a cleared stamp after removal,
+  and an empty `changes()` after an idle tick.
+
 ## 1.6.0 — 2026-11-10
 
 ### Added
