@@ -129,7 +129,21 @@
      they were added, and a world steps headless with no canvas - so the sim can
      be tested on its own. */
   G.ECS = function () {
-    var next = 1, entities = {}, systems = [];
+    var next = 1, entities = {}, systems = [], queue = [], flushing = false;
+    /* Structural changes made while a system is running are queued, not applied:
+       destroying an entity mid-iteration used to mean the caller stepped its own
+       index backwards. flush() applies them in order, once, between systems. */
+    function apply(cmd) {
+      if (cmd.op === "spawn") { api.create(cmd.comps); return; }
+      if (cmd.op === "destroy") { delete entities[cmd.id]; return; }
+      if (cmd.op === "add") { api.add(cmd.id, cmd.name, cmd.data); return; }
+      if (cmd.op === "remove") { api.remove(cmd.id, cmd.name); }
+    }
+    /* Sorted, so iteration order does not depend on the engine's key order. A
+       replay then steps the same entities in the same order every run. */
+    function sortedIds() {
+      return Object.keys(entities).map(Number).sort(function (a, b) { return a - b; });
+    }
     var api = {
       create: function (comps) {
         var id = next++;
@@ -145,22 +159,43 @@
       get: function (id, name) { var e = entities[id]; return e ? e[name] : undefined; },
       has: function (id, name) { var e = entities[id]; return !!(e && name in e); },
       remove: function (id, name) { var e = entities[id]; if (e) delete e[name]; return api; },
-      ids: function () { return Object.keys(entities).map(Number); },
+      ids: function () { return sortedIds(); },
       count: function () { return Object.keys(entities).length; },
       system: function (required, fn) { systems.push({ required: required, fn: fn }); return api; },
+
+      /* Queue a structural change for the end of the current system. */
+      commands: {
+        spawn: function (comps) { queue.push({ op: "spawn", comps: comps }); return api.commands; },
+        destroy: function (id) { queue.push({ op: "destroy", id: id }); return api.commands; },
+        add: function (id, name, data) { queue.push({ op: "add", id: id, name: name, data: data }); return api.commands; },
+        remove: function (id, name) { queue.push({ op: "remove", id: id, name: name }); return api.commands; },
+        pending: function () { return queue.length; }
+      },
+      flush: function () {
+        if (flushing) return api;      /* a command that queues a command is applied next time */
+        flushing = true;
+        while (queue.length) apply(queue.shift());
+        flushing = false;
+        return api;
+      },
+
       update: function (dt) {
         systems.forEach(function (s) {
-          api.ids().forEach(function (id) {
+          var ids = sortedIds();          /* a snapshot: spawns land after this system */
+          for (var n = 0; n < ids.length; n++) {
+            var id = ids[n];
+            if (!entities[id]) continue;  /* destroyed earlier in this pass */
             var all = true;
             for (var i = 0; i < s.required.length; i++) { if (!api.has(id, s.required[i])) { all = false; break; } }
             if (all) s.fn(id, entities[id], dt);
-          });
+          }
+          api.flush();                    /* between systems, never during one */
         });
         return api;
       }
     };
     return api;
-  };
+  };;
 
   /* ---------- state machine (v2) ---------- */
   /* Named states and allowed transitions (boot -> menu -> play -> pause ->
