@@ -753,6 +753,38 @@ try {
   ok("ecs: changes() is empty after an idle tick", JSON.stringify(w3.changes(w3.tick())) === "{}");
 }
 
+
+/* ---------- Machine: parity with the C port ---------- */
+/* raylib-starter's gk_machine builds the same three states and the same two
+   transitions, and its suite asserts the same trace. If either changes shape, one
+   of the two suites goes red. */
+{
+  const trace = [];
+  const m = G.Machine({
+    initial: "warmup",
+    transitions: {
+      warmup: { go: "live" },
+      live: { end: "finished" },
+      finished: {}
+    },
+    handlers: {
+      warmup: { enter: () => trace.push("+warmup"), exit: () => trace.push("-warmup") },
+      live:   { enter: () => trace.push("+live"),   exit: () => trace.push("-live") },
+      finished: { enter: () => trace.push("+finished") }
+    }
+  });
+
+  ok("machine: starts in the initial state", m.state() === "warmup");
+  ok("machine: warmup can go", m.can("go") === true);
+  ok("machine: warmup cannot end", m.can("end") === false);
+  ok("machine: go moves to live", m.send("go") === true && m.state() === "live");
+  ok("machine: go again is refused", m.send("go") === false && m.state() === "live");
+  ok("machine: end moves to finished", m.send("end") === true && m.state() === "finished");
+  ok("machine: finished accepts nothing", m.send("go") === false && m.send("end") === false);
+  ok("machine: the trace matches the C port",
+     JSON.stringify(trace) === JSON.stringify(["+warmup", "-warmup", "+live", "-live", "+finished"]));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

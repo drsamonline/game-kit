@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.0 — 2026-11-10
+
+### Added
+- `Machine` parity tests against `raylib-starter`'s C port: same three states, same two
+  transitions, same trace asserted in both suites
+- `tools/check-claims.js`, run in CI, which fails the build when the README's stated count drifts
+  from the suite
+
+### Verified
+- 234 assertions
+
 ## 1.7.0 — 2026-11-10
 
 ### Added

@@ -213,7 +213,7 @@ Every addition is reimplemented from the idea, not copied.
 
 ```
 node test-node.js
-226 passed, 0 failed
+234 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
