@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — 2026-11-10
+## 1.6.0 — 2026-11-10
 
 ### Added
 - `world.commands.spawn/destroy/add/remove`, queued and applied between systems by `update()`, so a system can change structure while the world is being iterated
