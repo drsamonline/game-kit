@@ -27,3 +27,7 @@ jobs:
           node-version: "20"
       - name: Run tests
         run: node test-node.js
+
+      # A README number is a claim. This fails the build when it drifts.
+      - name: Check the README's claims
+        run: node tools/check-claims.js
