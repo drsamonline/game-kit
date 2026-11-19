@@ -25,6 +25,15 @@ const warn = args.includes('--warn');
 const ROOT = path.resolve(args.find((a) => !a.startsWith('--')) || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const read = (p) => (fs.existsSync(path.join(ROOT, p)) ? fs.readFileSync(path.join(ROOT, p), 'utf8') : null);
 
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1;
+  }
+  return 0;
+}
+
 const problems = [];
 const warnings = [];
 const checked = [];
@@ -40,7 +49,14 @@ if (version) {
     const headings = [...changelog.matchAll(/^##\s+\[?v?([0-9]+\.[0-9]+\.[0-9]+)/gm)].map((m) => m[1]);
     if (headings.length) {
       checked.push(`CHANGELOG newest ${headings[0]}`);
-      if (headings[0] !== v) problems.push(`VERSION is ${v} but the newest CHANGELOG heading is ${headings[0]}`);
+      const cmp = compareVersions(v, headings[0]);
+      if (cmp < 0) {
+        // the changelog claims a release the version file does not know about
+        problems.push(`VERSION is ${v} but CHANGELOG.md already documents ${headings[0]}`);
+      } else if (cmp > 0) {
+        // a version bumped ahead of its changelog entry is work in progress
+        warnings.push(`VERSION is ${v}, ahead of the newest CHANGELOG heading ${headings[0]}`);
+      }
     }
   }
   const pkg = read('package.json');
