@@ -10,13 +10,19 @@
  * files are skipped, so the same tool runs in any repo.
  *
  *   node tools/check-meta.mjs [dir]
+ *   node tools/check-meta.mjs [dir] --warn   # report only, always exit 0
+ *
+ * --warn exists for a repo with a known drift: it can adopt the measurement
+ * before it can adopt the rule, and the badge stays honest.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
+const args = process.argv.slice(2);
+const warn = args.includes('--warn');
+const ROOT = path.resolve(args.find((a) => !a.startsWith('--')) || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const read = (p) => (fs.existsSync(path.join(ROOT, p)) ? fs.readFileSync(path.join(ROOT, p), 'utf8') : null);
 
 const problems = [];
@@ -97,8 +103,8 @@ if (license && readme) {
 console.log(`${path.basename(ROOT)}: ${checked.join(' · ') || 'nothing to check'}`);
 for (const w of warnings) console.log('  warn: ' + w);
 if (problems.length) {
-  console.log('FAIL:');
+  console.log((warn ? 'WARN:' : 'FAIL:'));
   for (const p of problems) console.log('  ' + p);
-  process.exit(1);
+  process.exit(warn ? 0 : 1);
 }
 console.log('version and licence agree with the files that hold them');
