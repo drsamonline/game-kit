@@ -785,6 +785,67 @@ try {
      JSON.stringify(trace) === JSON.stringify(["+warmup", "-warmup", "+live", "-live", "+finished"]));
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ---- v1.9: flow field -------------------------------------------------------
+const grid = 8;
+const walls = (x, z) => (x === 4 && z < 6) || z === 0 || x === 0;   // a wall with a gap at the bottom
+const ff = G.flowField({ width: grid, height: grid, blocked: walls });
+ff.build(7, 7);
+ok("flow field: the target is distance 0", ff.dist(7, 7) === 0);
+ok("flow field: a reachable cell has a distance", ff.dist(2, 7) > 0);
+ok("flow field: a walled cell is -1, not 0", ff.dist(4, 2) === -1);
+const stepFrom = ff.step(2, 7);
+ok("flow field: step returns a downhill neighbour", stepFrom && ff.dist(stepFrom.x, stepFrom.z) < ff.dist(2, 7));
+ok("flow field: step on the target is null", ff.step(7, 7) === null);
+ok("flow field: step on an unreachable cell is null", ff.step(4, 2) === null);
+// an agent walking the field must arrive
+let ax = 2, az = 7, guard = 0;
+while (guard++ < 200) {
+  const st = ff.step(ax, az);
+  if (!st) break;
+  ax = st.x; az = st.z;
+}
+ok("flow field: an agent walking it arrives", ax === 7 && az === 7);
+// out of bounds is -1, not a crash
+ok("flow field: out of bounds reads -1", ff.dist(-1, 3) === -1 && ff.dist(99, 99) === -1);
 
+// ---- v1.9: pool -------------------------------------------------------------
+let madeCount = 0;
+const pool = G.pool({ cap: 3, make: () => ({ id: ++madeCount, live: true }), reset: (o) => { o.live = false; } });
+const a = pool.acquire(), b = pool.acquire(), c = pool.acquire();
+ok("pool: acquires up to the cap", a && b && c && pool.inUse() === 3);
+ok("pool: past the cap returns null, it does not grow", pool.acquire() === null);
+pool.release(a);
+ok("pool: a released object is reused, not remade", pool.acquire() === a && madeCount === 3);
+pool.release(b); pool.release(c);
+ok("pool: reset runs on release", b.live === false);
+ok("pool: stats count the miss", pool.stats().misses === 1);
+
+// ---- v1.9: minimap ----------------------------------------------------------
+const mm = G.minimap(null, { cols: 16, rows: 16, size: 128, cell: 2, isWall: (x, z) => x === 0 });
+ok("minimap: scale is pixels per world unit", Math.abs(mm.scale - 4) < 0.001);
+const at = mm.cellAt(8, 8);
+ok("minimap: a world point maps into the canvas", at.x > 0 && at.x < 128 && at.y > 0 && at.y < 128);
+let drew = 0;
+mm.draw({ drawImage: () => {}, fillRect: () => {} }, () => drew++);
+ok("minimap: draw runs the marker callback", drew === 1);
+
+// ---- v1.9: generative music -------------------------------------------------
+const scale = G.audio.genScale(2);
+ok("music: the scale is a minor pentatonic over two octaves", scale.length === 10 && scale[1] === 3 && scale[5] === 12);
+const gen = G.audio.gen({ bpm: 120, density: 1, root: 55 });
+gen.setIntensity(0.8);
+ok("music: intensity is stored and clamped", gen.intensity() === 0.8 && (gen.setIntensity(9), gen.intensity() === 1));
+gen.start(0);
+const queued = gen.update(0.5);
+const notes = gen.drain();
+ok("music: a full density queues notes", queued > 0 && notes.length === queued);
+ok("music: notes are in the future, not the past", notes.every((n) => n.time >= 0 && n.time <= 0.5 + 0.25 + 0.001));
+ok("music: a note frequency is in a sane range", notes.every((n) => n.freq > 20 && n.freq < 2000));
+ok("music: drain empties the queue", gen.drain().length === 0);
+gen.stop();
+ok("music: stopped means nothing queues", gen.update(10) === 0);
+
+console.log("");
+console.log(pass + " passed, " + fail + " failed");
+if (fail) process.exit(1);
+console.log("ALL KIT TESTS PASSED");

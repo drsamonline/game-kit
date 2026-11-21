@@ -1068,6 +1068,190 @@
 
 
 
+
+
+  /* ---------- flow field (v1.9) ----------
+     Grid navigation for anything that chases: enemies, followers, a cursor.
+     BFS from the TARGET once, then every agent asks `step(x, z)` and walks
+     downhill. Rebuilding a path per agent per frame is the thing this replaces.
+
+     Four rules, each from a bug in the game that needed it:
+
+     1. THE FIELD IS BUILT FROM THE TARGET, not from the agent. One build serves
+        every chaser on the floor, and an agent that spawns later is already in
+        the field.
+     2. A CELL THE FIELD CANNOT REACH STAYS -1, not 0. Zero means "the target
+        itself" and an agent reading 0 as unreachable walks straight at a wall.
+     3. `step` NEVER RETURNS A DIRECTION INTO A BLOCKED CELL. If every neighbour
+        is uphill it returns null and the caller can wander instead of grinding.
+     4. HEIGHT IS OPTIONAL. Give `blocked` a second argument and a cell can be
+        walkable but not enterable from a given direction (a ledge, a one-way
+        drop); without it the field is flat and cheap.
+  */
+  G.flowField = function (opts) {
+    opts = opts || {};
+    var w = opts.width | 0, h = opts.height | 0;
+    var blocked = opts.blocked || function () { return false; };
+    var field = new Int32Array(w * h);
+    field.fill(-1);
+
+    function build(tx, tz) {
+      field.fill(-1);
+      if (tx < 0 || tz < 0 || tx >= w || tz >= h) return field;
+      var queue = new Int32Array(w * h);
+      var head = 0, tail = 0;
+      var start = tz * w + tx;
+      field[start] = 0;
+      queue[tail++] = start;
+      while (head < tail) {
+        var k = queue[head++];
+        var x = k % w, z = (k - x) / w;
+        var d = field[k] + 1;
+        for (var i = 0; i < 4; i++) {
+          var nx = x + (i === 0 ? 1 : i === 1 ? -1 : 0);
+          var nz = z + (i === 2 ? 1 : i === 3 ? -1 : 0);
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          var nk = nz * w + nx;
+          if (field[nk] !== -1) continue;
+          if (blocked(nx, nz, x, z)) continue;
+          field[nk] = d;
+          queue[tail++] = nk;
+        }
+      }
+      return field;
+    }
+
+    return {
+      width: w,
+      height: h,
+      field: field,
+      build: build,
+      /** Distance in cells from the target, or -1 if unreachable. */
+      dist: function (x, z) {
+        if (x < 0 || z < 0 || x >= w || z >= h) return -1;
+        return field[z * w + x];
+      },
+      /** The next cell downhill, or null when there is nowhere better to go. */
+      step: function (x, z) {
+        if (x < 0 || z < 0 || x >= w || z >= h) return null;
+        var here = field[z * w + x];
+        if (here <= 0) return null;
+        var best = null, bestD = here;
+        for (var i = 0; i < 4; i++) {
+          var nx = x + (i === 0 ? 1 : i === 1 ? -1 : 0);
+          var nz = z + (i === 2 ? 1 : i === 3 ? -1 : 0);
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          var d = field[nz * w + nx];
+          if (d < 0 || d >= bestD) continue;
+          bestD = d;
+          best = { x: nx, z: nz, dist: d };
+        }
+        return best;
+      }
+    };
+  };
+
+  /* ---------- object pool (v1.9) ----------
+     Bullets, particles, corpses, damage numbers: things that are created and
+     destroyed thousands of times a minute. The pool exists so the garbage
+     collector does not decide when the frame ends.
+
+     `acquire` hands back a free object or makes one; `release` resets it and
+     puts it back. `cap` is a hard ceiling, so a runaway spawner stops at the
+     ceiling instead of eating the heap. `stats()` reports hits and misses so
+     you can size the pool from evidence rather than from a guess.
+  */
+  G.pool = function (opts) {
+    opts = opts || {};
+    var make = opts.make || function () { return {}; };
+    var reset = opts.reset || function () {};
+    var cap = opts.cap > 0 ? opts.cap : 512;
+    var free = [];
+    var live = 0;
+    var made = 0, misses = 0;
+
+    return {
+      cap: cap,
+      acquire: function () {
+        if (live >= cap) { misses++; return null; }
+        live++;
+        if (free.length) return free.pop();
+        made++;
+        return make();
+      },
+      release: function (obj) {
+        if (!obj) return;
+        if (live > 0) live--;
+        if (free.length >= cap) return;
+        reset(obj);
+        free.push(obj);
+      },
+      /** How many are checked out right now. */
+      inUse: function () { return live; },
+      /** Objects made, pool misses (cap hit), and how many are idle. */
+      stats: function () { return { made: made, misses: misses, free: free.length, live: live }; }
+    };
+  };
+
+  /* ---------- minimap (v1.9) ----------
+     A floor plan drawn once and markers drawn on top. The trick is that the
+     walls never change, so they are prerendered into an offscreen canvas at
+     build time and each frame is a blit plus a few dots — a minimap that
+     redraws every wall every frame costs more than the game.
+
+     It takes a `draw(ctx, api)` callback rather than knowing about your game:
+     `api.cell(x, z)` gives the pixel centre of a grid cell, `api.scale` is the
+     cell size in pixels, and `api.blit()` puts the prerendered floor down.
+  */
+  G.minimap = function (canvas, opts) {
+    opts = opts || {};
+    var cols = opts.cols | 0, rows = opts.rows | 0;
+    var size = opts.size > 0 ? opts.size : 128;
+    var dpr = opts.dpr > 0 ? opts.dpr : 1;
+    var cell = opts.cell > 0 ? opts.cell : 1;
+    var isWall = opts.isWall || function () { return false; };
+    var floor = opts.floor || '#1a1714';
+    var wall = opts.wall || 'rgba(120,104,84,0.32)';
+
+    if (canvas) {
+      canvas.width = size * dpr;
+      canvas.height = size * dpr;
+    }
+    var scale = (size * dpr) / (Math.max(cols, rows) * cell);
+
+    // the floor plan, drawn once
+    var base = null;
+    if (opts.document || (typeof document !== 'undefined')) {
+      var doc = opts.document || document;
+      base = doc.createElement('canvas');
+      base.width = size * dpr;
+      base.height = size * dpr;
+      var bg = base.getContext('2d');
+      if (bg) {
+        bg.fillStyle = floor;
+        bg.fillRect(0, 0, base.width, base.height);
+        bg.fillStyle = wall;
+        for (var z = 0; z < rows; z++) {
+          for (var x = 0; x < cols; x++) {
+            if (isWall(x, z)) continue;
+            bg.fillRect(x * cell * scale - scale / 2, z * cell * scale - scale / 2, scale + 0.5, scale + 0.5);
+          }
+        }
+      }
+    }
+
+    return {
+      scale: scale,
+      cellAt: function (wx, wz) { return { x: (wx / cell) * scale, y: (wz / cell) * scale }; },
+      /** Blit the prerendered floor, then run the caller's marker drawing. */
+      draw: function (ctx, drawMarkers) {
+        if (!ctx) return;
+        if (base) ctx.drawImage(base, 0, 0);
+        if (typeof drawMarkers === 'function') drawMarkers(ctx, this);
+      }
+    };
+  };
+
   /* ---------- scene graph (v1.5) ----------
      A hierarchy of transforms, because every 2-D game eventually needs one:
      a gun that follows a hand that follows a body that follows a camera. Doing
@@ -1551,6 +1735,87 @@
       return src;
     }
 
+
+    /* ---------- generative music (v1.9) ----------
+       The pattern sequencer above plays what you wrote. This writes it for you:
+       a scale, a tempo, and a rule for which note comes next, with an intensity
+       the game feeds in from its own tension. Scene in, music out.
+
+       The scale is a minor pentatonic on purpose — any note in it sounds like it
+       belongs, so a random walk through it cannot produce a wrong note. That is
+       the whole trick, and it is why generative music sounds deliberate.
+    */
+    var GEN_SCALE = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
+
+    /** Semitone offsets of a minor pentatonic, `octaves` wide. */
+    function genScale(octaves) {
+      var n = octaves > 0 ? octaves : 2;
+      var out = [];
+      for (var o = 0; o < n; o++) {
+        for (var i = 0; i < 5; i++) out.push(GEN_SCALE[i] + 12 * o);
+      }
+      return out;
+    }
+
+    /**
+     * A generative scheduler. `update(now)` is called every frame with the audio
+     * clock; it queues what is due in the next `lookahead` seconds and no more,
+     * so a backgrounded tab does not come back with an hour of notes.
+     */
+    function gen(opts) {
+      opts = opts || {};
+      var scale = opts.scale || genScale(2);
+      var rootHz = opts.root || 55;
+      var bpm = opts.bpm || 90;
+      var density = opts.density != null ? opts.density : 0.6;
+      var intensity = 0;
+      var step = 0;
+      var nextTime = 0;
+      var lookahead = opts.lookahead > 0 ? opts.lookahead : 0.25;
+      var playing = false;
+      var notes = [];   // { time, freq, dur, gain } — the caller plays these
+
+      return {
+        scale: scale,
+        setScene: function (o) {
+          if (o && o.bpm > 0) bpm = o.bpm;
+          if (o && o.density != null) density = o.density;
+          if (o && o.root > 0) rootHz = o.root;
+        },
+        setIntensity: function (v) { intensity = G.clamp(v, 0, 1); },
+        intensity: function () { return intensity; },
+        start: function (now) { playing = true; step = 0; nextTime = (now || 0) + 0.08; },
+        stop: function () { playing = false; },
+        /** Queue every step due before now + lookahead. Returns notes queued. */
+        update: function (now) {
+          if (!playing) return 0;
+          var stepDur = (60 / bpm) / 4;
+          if (nextTime < now - 0.5) nextTime = now + 0.05;  // dropped out of the tab
+          var queued = 0;
+          while (nextTime < now + lookahead) {
+            var busy = density * (0.55 + intensity * 0.75);
+            if (Math.random() < busy) {
+              var i = (step * 2 + Math.floor(Math.random() * 3)) % scale.length;
+              var semi = scale[i];
+              var octave = intensity > 0.7 && Math.random() < 0.3 ? 12 : 0;
+              notes.push({
+                time: nextTime,
+                freq: rootHz * Math.pow(2, (semi + octave) / 12),
+                dur: stepDur * 1.6,
+                gain: 0.05 + intensity * 0.04
+              });
+              queued++;
+            }
+            step++;
+            nextTime += stepDur;
+          }
+          return queued;
+        },
+        /** Take the notes queued so far; the caller plays and forgets them. */
+        drain: function () { var out = notes; notes = []; return out; }
+      };
+    }
+
     return {
       freq: freq,
       midi: midi,
@@ -1561,7 +1826,9 @@
       track: track,
       sfx: sfx,
       presets: presets,
-      play: play
+      play: play,
+      genScale: genScale,
+      gen: gen
     };
   })();
 

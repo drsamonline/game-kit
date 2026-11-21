@@ -48,6 +48,11 @@ Kit.clamp(...)
 | `Kit.tiled` | `()` | — |
 | `Kit.atlas` | `(spec)` | — |
 | `Kit.SpriteBatch` | `(opts)` | — |
+| `Kit.flowField` | `(opts)` | grid navigation: BFS from the target, `step(x, z)` walks downhill, `-1` is unreachable |
+| `Kit.pool` | `(opts)` | reuse before allocation, hard `cap`, `stats()` reports made / misses / free / live |
+| `Kit.minimap` | `(canvas, opts)` | floor plan prerendered once, then a blit plus your markers |
+| `Kit.audio.gen` | `(opts)` | generative music: scale, tempo, `setIntensity`, `drain()` |
+| `Kit.audio.genScale` | `(octaves)` | the minor pentatonic the generator walks |
 | `Kit.Node` | `(props)` | / |
 | `Kit.node` | `(props)` | — |
 

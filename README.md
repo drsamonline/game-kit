@@ -28,6 +28,10 @@ engine every small browser game was re-implementing, extracted once from
 - a **world-to-map view** *(v1.2)* — a voxel world rendered top-down as tiles.
 - **sprite batching** *(v1.3)* — `Game.atlas` + `Game.SpriteBatch`: sprites grouped by image, so 2,000 sprites cost 4 draw calls; a fixed buffer that **spills instead of dropping the tail**, a stable `z` order, and culling/misses you can count.
 - **a scene graph** *(v1.5)* — `Game.node`: parent/child transforms composed and **cached** (moving one node dirties only its subtree), a cycle **refused at the door**, a walk that never recurses (20,000 deep is slow, not a stack overflow), and `localPoint` that returns `null` instead of `Infinity` for a zero scale.
+- **grid navigation** *(v1.9)* — `Game.flowField`: BFS from the target once, then every chaser asks `step(x, z)` and walks downhill. Unreachable is `-1` (not `0`, which means "you are there"), and `step` never points into a blocked cell.
+- **object pooling** *(v1.9)* — `Game.pool`: bullets, particles and corpses that are created and destroyed thousands of times a minute. A hard `cap`, reuse before allocation, and `stats()` so you size the pool from evidence.
+- **a minimap** *(v1.9)* — `Game.minimap`: the floor plan prerendered once into an offscreen canvas, then a blit plus your markers. A minimap that redraws every wall every frame costs more than the game.
+- **generative music** *(v1.9)* — `Game.audio.gen`: a minor pentatonic, a tempo and a rule for the next note, with an intensity your game feeds in. The sequencer plays what you wrote; this writes it.
 - **code-audio** *(v1.4)* — `Game.audio`: pitches from names, seeded oscillators, ADSR that cannot click, a pattern grid (`bpm` + `seq`) rendered to a `Float32Array`, five SFX presets as data, and `play(ctx, samples)` as the only browser-dependent line. **Game music is patterns, not files.**
 
 Every one of those exists because a shipped game got it wrong first. The stories are in
@@ -213,7 +217,7 @@ Every addition is reimplemented from the idea, not copied.
 
 ```
 node test-node.js
-234 passed, 0 failed
+257 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,

@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.9.0 — 2026-11-21
+
+Four things extracted from a shipped game (HELLGATE) that every game re-writes badly.
+
+**`Game.flowField`** — grid navigation for anything that chases. BFS from the target once, then every
+agent asks `step(x, z)` and walks downhill.
+
+| Rule | Why |
+| --- | --- |
+| Built from the target, not the agent | One build serves every chaser, and an agent that spawns later is already in the field |
+| Unreachable is `-1`, not `0` | `0` means "you are at the target"; an agent reading it as unreachable walks into a wall |
+| `step` never points into a blocked cell | Every neighbour uphill returns `null`, so the caller can wander instead of grinding |
+| Height is optional | `blocked(x, z, fromX, fromZ)` lets a cell be walkable but not enterable from one side |
+
+**`Game.pool`** — bullets, particles, corpses. A hard `cap`, reuse before allocation, `reset` on release,
+and `stats()` reporting made / misses / free / live so you size it from evidence.
+
+**`Game.minimap`** — the floor plan prerendered once into an offscreen canvas, then a blit plus a marker
+callback. It knows nothing about your game: `cellAt(wx, wz)` and `scale` are the whole contract.
+
+**`Game.audio.gen`** — generative music. A minor pentatonic (any note in it belongs), a tempo, and a rule
+for the next note, with `setIntensity(0..1)` and `drain()` so the caller plays and forgets. The existing
+sequencer plays what you wrote; this writes it.
+
+**Tests** — 23 new assertions, 257 total: a walled cell is `-1` and an agent walking the field arrives;
+the pool refuses past its cap and reuses a released object without remaking it; the minimap maps a world
+point into the canvas; the generator queues notes in the future and nothing when stopped.
+
+
 ## 1.8.0 — 2026-11-10
 
 ### Added
