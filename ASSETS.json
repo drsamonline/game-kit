@@ -1,0 +1,68 @@
+{
+  "$comment": "Every binary asset needs an entry. See tools/check-assets.mjs and docs/SOURCES.md.",
+  "assets": [
+    {
+      "path": "docs/assets/badge-build.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/badge-deps.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/badge-licence.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/badge-live.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/badge-offline.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/badge-tests.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/concept.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/support-portrait.jpg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    },
+    {
+      "path": "docs/assets/upi-qr.svg",
+      "source": "own",
+      "licence": "own",
+      "author": "Dr Sohil Momin",
+      "note": "authored for this repository"
+    }
+  ]
+}

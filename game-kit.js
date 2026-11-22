@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.10.0" };
+  var G = { version: "1.11.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };

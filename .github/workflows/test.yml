@@ -31,3 +31,8 @@ jobs:
       # A README number is a claim. This fails the build when it drifts.
       - name: Check the README's claims
         run: node tools/check-claims.js
+
+      # A sprite arrives without a diff anyone reads. Every asset is declared, with a
+      # source and a licence that this repository can actually carry.
+      - name: Check every asset is declared
+        run: node tools/check-assets.mjs

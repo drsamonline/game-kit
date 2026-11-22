@@ -279,6 +279,20 @@ const thisFrame = play.next();        // null when the tape ends
 - **A replay needs the fixed step and the seed it was recorded with**, which is why it
   could not exist before v1.10.
 
+## Assets and licences
+
+This kit ships **no assets** — every texture is generated and every sound is synthesised —
+so a sprite sheet here would be a product decision, not a small addition. If one ever
+arrives, it arrives declared:
+
+```
+node tools/check-assets.mjs        # every asset needs a source and an allowed licence
+```
+
+`docs/SOURCES.md` is the audit behind that rule: 30 "open source games" links checked,
+none of which ship art, the sources that do (Kenney is CC0; OpenGameArt is per item), and
+why CC-BY-SA and GPL art do not go into a kit under PolyForm Noncommercial.
+
 ## Verified
 
 ```

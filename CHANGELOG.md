@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.11.0 — 2026-11-22
+
+No library change. This release is what came out of auditing 30 "open-source games"
+links: **no source in that list ships art**, the licences that matter live elsewhere, and
+a repository needs a way to say so before a sprite arrives.
+
+**`docs/SOURCES.md`** — the audit. All 30 links, what each actually is (24 of them are
+catalogues, duplicates, or a login wall), the six worth keeping an eye on, the tool list
+from the GitHub article with each licence checked, and the art sources that do exist
+(Kenney is CC0; OpenGameArt is per-item; CC-BY-SA and GPL art do not belong in a kit
+like this one).
+
+**`tools/check-assets.mjs` + `ASSETS.json`** — every binary asset must be declared with a
+source and a licence, and the licence must be on the allow list (CC0, CC-BY, OGA-BY, MIT,
+Apache-2.0, OFL, or `own`). Undeclared file, missing source, copyleft licence, or a stale
+manifest entry all fail the build; `--warn` reports without failing, `--root` points it at
+another repository, so the same gate can run across the fleet. The 9 files in `docs/assets`
+are declared as `own`.
+
+
 ## 1.10.0 — 2026-11-22
 
 Five modules taken from a survey of the open-source game world rather than from one more
