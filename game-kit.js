@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.11.0" };
+  var G = { version: "1.12.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -2459,6 +2459,177 @@
       }
     };
   };
+
+  /* ---------- LDtk project reader (v1.12) ----------
+     LDtk is the other 2D level editor a game meets, and the one that stores its levels
+     as plain JSON. `Game.tiled` reads Tiled; this reads LDtk 1.5.x, from the format as
+     the project documents it — not from memory of what it probably looks like.
+
+     Five rules, each one a wrong-looking level:
+
+     1. LAYERS ARE SORTED TOP-MOST FIRST. LDtk writes `layerInstances` in display order
+        with the 1st layer in front and the last behind, so drawing the array in order
+        paints the background over the player. `drawOrder()` is the array reversed, and
+        it exists so nobody has to remember which way round it is.
+     2. AN INTGRID CELL IS 0 = EMPTY, VALUES START AT 1. Reading 0 as a tile id puts
+        tile 0 in every empty cell — usually the top-left corner of the sheet, tiled
+        across the whole map. `intAt` returns 0 for empty and 0 off the map, and the
+        caller tests `> 0`.
+     3. `px` IS RELATIVE TO THE LAYER, NOT THE LEVEL. A layer with an offset (a parallax
+        background, a layer resized after the level grew) draws its tiles in the wrong
+        place unless `__pxTotalOffsetX/Y` is added. `tiles()` adds it.
+     4. A TILE'S SOURCE RECTANGLE IS `src`, NOT `d[1]`. `src` is already in tileset
+        pixels; `d[1]` is a tile index in the sheet, and turning that into pixels needs
+        the tileset's grid, spacing and padding — `tileRect()` does it, for the callers
+        that only kept the index.
+     5. `layerInstances` CAN BE NULL. With "save levels separately" the project holds an
+        `externalRelPath` instead and the layers live in a `.ldtkl` file. A reader that
+        assumes an array throws on a project that is perfectly valid.
+
+     The flip bits are kept as the format's own two bits: 1 = mirrored in X, 2 = mirrored
+     in Y, 3 = both. */
+  G.ldtk = (function () {
+    function parse(json) {
+      if (!json || typeof json !== "object") throw new Error("ldtk: nothing to parse");
+      if (!Array.isArray(json.levels)) throw new Error("ldtk: no levels array — is this an LDtk project?");
+
+      var tilesets = {};
+      var defs = json.defs || {};
+      (defs.tilesets || []).forEach(function (t) {
+        if (!t || t.uid == null) return;
+        tilesets[t.uid] = {
+          uid: t.uid,
+          cWid: t.__cWid | 0,
+          cHei: t.__cHei | 0,
+          grid: t.tileGridSize || 16,
+          pxWid: t.pxWid | 0,
+          pxHei: t.pxHei | 0,
+          padding: t.padding | 0,
+          spacing: t.spacing | 0,
+          path: t.relPath || null,
+          identifier: t.identifier || null
+        };
+      });
+
+      function layerOf(src) {
+        var cw = src.__cWid | 0, ch = src.__cHei | 0;
+        var grid = src.__gridSize || 16;
+        var ox = src.__pxTotalOffsetX || src.pxOffsetX || 0;
+        var oy = src.__pxTotalOffsetY || src.pxOffsetY || 0;
+        var csv = src.intGridCsv || null;
+
+        function tilesOf() {
+          var list = (src.gridTiles || []).concat(src.autoLayerTiles || []);
+          return list.map(function (t) {
+            var px = t.px || [0, 0], s = t.src || [0, 0], d = t.d || null;
+            return {
+              x: px[0] + ox, y: px[1] + oy,          // rule 3: layer offset included
+              sx: s[0], sy: s[1],                    // rule 4: the rectangle, in tileset pixels
+              flip: t.f | 0,                         // 1 = X, 2 = Y, 3 = both
+              cell: d ? d[0] : null,
+              tileId: d ? d[1] : null
+            };
+          });
+        }
+
+        return {
+          name: src.__identifier || "",
+          type: src.__type || "",
+          cw: cw,
+          ch: ch,
+          grid: grid,
+          offsetX: ox,
+          offsetY: oy,
+          opacity: src.__opacity == null ? 1 : src.__opacity,
+          visible: src.visible !== false,
+          tilesetUid: src.__tilesetDefUid == null ? null : src.__tilesetDefUid,
+          /** An IntGrid cell: 0 is empty and 0 is off the map (rule 2). */
+          intAt: function (x, z) {
+            if (!csv) return 0;
+            if (!(x >= 0) || !(z >= 0) || x >= cw || z >= ch) return 0;
+            var v = csv[(z | 0) * cw + (x | 0)];
+            return v == null ? 0 : v;
+          },
+          /** Every tile, grid and auto, in the order the editor wrote them. */
+          tiles: tilesOf,
+          entities: function () {
+            return (src.entityInstances || []).map(function (e) {
+              var fields = {};
+              (e.fieldInstances || []).forEach(function (f) {
+                if (f && f.__identifier != null) fields[f.__identifier] = f.__value;
+              });
+              return {
+                name: e.__identifier || "",
+                x: (e.px || [0, 0])[0],
+                y: (e.px || [0, 0])[1],
+                w: e.width | 0,
+                h: e.height | 0,
+                fields: fields,
+                iid: e.iid || null
+              };
+            });
+          }
+        };
+      }
+
+      function levelOf(src) {
+        var layers = (src.layerInstances || []).map(layerOf);
+        return {
+          identifier: src.identifier || "",
+          uid: src.uid == null ? null : src.uid,
+          pxWid: src.pxWid | 0,
+          pxHei: src.pxHei | 0,
+          worldX: src.worldX | 0,
+          worldY: src.worldY | 0,
+          external: src.externalRelPath || null,
+          layers: layers,
+          layer: function (id) {
+            for (var i = 0; i < layers.length; i++) if (layers[i].name === id) return layers[i];
+            return null;
+          },
+          /** Back to front: the array reversed (rule 1). Draw with this. */
+          drawOrder: function () { return layers.slice().reverse(); }
+        };
+      }
+
+      var levels = json.levels.map(levelOf);
+      var byName = {}, byUid = {};
+      levels.forEach(function (l) {
+        if (l.identifier) byName[l.identifier] = l;
+        if (l.uid != null) byUid[l.uid] = l;
+      });
+
+      return {
+        version: json.jsonVersion || null,
+        worldGridWidth: json.worldGridWidth | 0,
+        worldGridHeight: json.worldGridHeight | 0,
+        defaultGridSize: json.defaultGridSize | 0,
+        levels: levels,
+        tilesets: tilesets,
+        /** A level by identifier (string) or uid (number), or null. */
+        level: function (id) {
+          if (typeof id === "number") return byUid[id] || null;
+          return byName[id] || null;
+        },
+        /** A tile index in a tileset -> its rectangle, spacing and padding included. */
+        tileRect: function (tilesetUid, tileId) {
+          var t = tilesets[tilesetUid];
+          if (!t || !(t.cWid > 0)) return null;
+          var id = tileId | 0;
+          if (id < 0 || id >= t.cWid * t.cHei) return null;
+          var col = id % t.cWid, row = (id - col) / t.cWid;
+          return {
+            x: t.padding + col * (t.grid + t.spacing),
+            y: t.padding + row * (t.grid + t.spacing),
+            w: t.grid,
+            h: t.grid
+          };
+        }
+      };
+    }
+
+    return { parse: parse };
+  })();
 
   root.Game = G;
 })(typeof globalThis !== "undefined" ? globalThis : this);

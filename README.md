@@ -36,6 +36,7 @@ engine every small browser game was re-implementing, extracted once from
 - **sprite animation** *(v1.10)* — `Game.anim`: clips over atlas frame names with `loop` / `once` / `pingpong`, per-frame **events** (a footstep on frame 3), `done()` that holds the last frame, and `fps: 0` that freezes instead of dividing by zero.
 - **A\* pathfinding** *(v1.10)* — `Game.astar`: an arbitrary target, no **corner cutting** between two walls, a deterministic tie-break so a replay re-paths identically, and a **node budget** so a hopeless search cannot eat the frame. `null`, never `[]`, when there is no route.
 - **particles** *(v1.10)* — `Game.particles`: pooled, seeded and capped. When the budget is full the **oldest** particle dies, so a fresh muzzle flash is not swallowed by old smoke.
+- **an LDtk reader** *(v1.12)* — `Game.ldtk`: levels, IntGrid cells (`0` is empty, values start at 1), tiles with their source rectangles and flip bits, entities with their fields, and `drawOrder()` — because LDtk writes layers **top-most first** and drawing the array in order paints the background over the player.
 - **replays** *(v1.10)* — `Game.replay`: one input snapshot per **fixed step**, run-length encoded, with the seed and the step travelling with the file, and checkpoints so a desync is caught where it happens.
 - **code-audio** *(v1.4)* — `Game.audio`: pitches from names, seeded oscillators, ADSR that cannot click, a pattern grid (`bpm` + `seq`) rendered to a `Float32Array`, five SFX presets as data, and `play(ctx, samples)` as the only browser-dependent line. **Game music is patterns, not files.**
 
@@ -223,6 +224,42 @@ The kit absorbed the engine patterns every small browser game rebuilds:
 
 Every addition is reimplemented from the idea, not copied.
 
+## LDtk levels *(v1.12)*
+
+Tiled has a sibling, and a 2D game is as likely to meet it: LDtk stores levels as plain
+JSON. `Game.tiled` reads one; this reads the other, from the format the project documents.
+
+```js
+const proj = Game.ldtk.parse(json);          // the whole .ldtk file
+const lvl  = proj.level("Level_0");          // by identifier, or by uid
+
+for (const layer of lvl.drawOrder()) {       // back to front — the array is top-most first
+  if (layer.type === "IntGrid") {
+    for (let z = 0; z < layer.ch; z++)
+      for (let x = 0; x < layer.cw; x++)
+        if (layer.intAt(x, z) > 0) drawCollider(x, z, layer.intAt(x, z));
+  }
+  if (layer.type === "Tiles" || layer.type === "AutoLayer") {
+    for (const t of layer.tiles()) drawTile(t.sx, t.sy, t.x, t.y, t.flip);
+  }
+  if (layer.type === "Entities") {
+    for (const e of layer.entities()) spawn(e.name, e.x, e.y, e.fields);
+  }
+}
+```
+
+- **The first layer is the top-most.** LDtk sorts `layerInstances` in display order with
+  the front layer first, so drawing the array as it comes puts the background on top.
+  `drawOrder()` is the reversed array and exists so nobody has to remember.
+- **An IntGrid cell is `0` for empty, and values start at 1** — read `0` as a tile id and
+  every empty cell gets tile 0, tiled across the map.
+- **`px` is relative to the layer.** `tiles()` adds `__pxTotalOffsetX/Y`, or a parallax
+  layer draws its tiles somewhere else.
+- **`src` is the rectangle; `d[1]` is only an index.** `tileRect(uid, id)` turns the index
+  into pixels when you kept only the index, with the tileset's spacing and padding.
+- **`layerInstances` can be `null`.** A project saving levels separately keeps them in
+  `.ldtkl` files; `level().external` names the file and `layers` is empty, not an error.
+
 ## Camera, animation, paths, particles, replays *(v1.10)*
 
 Five things every game in the family wrote again, taken from the catalogue of open-source
@@ -297,7 +334,7 @@ why CC-BY-SA and GPL art do not go into a kit under PolyForm Noncommercial.
 
 ```
 node test-node.js
-314 passed, 0 failed
+334 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
@@ -312,7 +349,9 @@ shake determinism, picking during a shake, 60 fps vs 30 fps), the clip player
 (wrap, `once`, `pingpong`, frozen `fps: 0`, events on entry, no restart on replay),
 A\* (a wall walked around, a sealed goal, no corner cutting, the node budget, the
 same path twice), particles (gravity, life, the cap, the same seed) and replays
-(collapse, copy, step mismatch, checkpoints, a truncated tape).
+(collapse, copy, step mismatch, checkpoints, a truncated tape), and the LDtk reader
+(layer order, an IntGrid's row-major cells and empty `0`, a layer offset, flip bits,
+auto-layer tiles, entity fields, a separately saved level, and a tile index to rectangle).
 
 ## Games built with game-kit
 

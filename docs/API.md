@@ -1,6 +1,6 @@
 # game-kit — API reference
 
-**Version 1.10.0.** **The shared game core for drsamonline apps.** Zero dependencies. The common engine every small browser game was re-implementing, extracted once from `neon-engine` and `Aethelgard-Engine`.
+**Version 1.12.0.** **The shared game core for drsamonline apps.** Zero dependencies. The common engine every small browser game was re-implementing, extracted once from `neon-engine` and `Aethelgard-Engine`.
 
 Generated from the source in this repository: every name, argument and
 note below is read out of the kit file, so it cannot describe a function
@@ -12,7 +12,7 @@ Kit.clamp(...)
 // or: const Kit = require('./game-kit.js')
 ```
 
-## The surface (45 entries)
+## The surface (46 entries)
 
 | Name | Arguments | What it does |
 |---|---|---|
@@ -59,6 +59,7 @@ Kit.clamp(...)
 | `Kit.particles` | `(opts)` | pooled, seeded emitter: `burst`, `update`, `each`; the oldest particle dies at the cap |
 | `Kit.replay` | `(opts)` | record one input snapshot per fixed step; `export()` run-length encodes and carries step + seed |
 | `Kit.replay.load` | `(data)` | read a tape back; `ok:false` with a `reason` rather than a repair |
+| `Kit.ldtk` | `()` | `parse(json)` for an LDtk 1.5.x project: levels, IntGrid cells, tiles, entities, `drawOrder()` |
 | `Kit.Node` | `(props)` | / |
 | `Kit.node` | `(props)` | — |
 

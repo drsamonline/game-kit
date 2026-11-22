@@ -1056,6 +1056,72 @@ ok("replay: a foreign file is refused", G.replay.load(null).ok === false && G.re
 ok("replay: a truncated tape is refused",
    G.replay.load({ format: "game-kit.replay", version: 1, step: 1 / 60, seed: 1, count: 9, runs: [["1", 2]] }).ok === false);
 
+// ---- v1.12: LDtk ------------------------------------------------------------
+const ldtkFixture = {
+  jsonVersion: "1.5.3", worldGridWidth: 128, worldGridHeight: 128, defaultGridSize: 16,
+  defs: { tilesets: [{ uid: 3, identifier: "Tiles", __cWid: 8, __cHei: 4, tileGridSize: 16,
+    pxWid: 128, pxHei: 64, padding: 1, spacing: 2, relPath: "tiles.png" }] },
+  levels: [{
+    identifier: "Level_0", uid: 7, pxWid: 64, pxHei: 32, worldX: 0, worldY: 0,
+    layerInstances: [
+      { __identifier: "Walls", __type: "IntGrid", __cWid: 4, __cHei: 2, __gridSize: 16,
+        __pxTotalOffsetX: 0, __pxTotalOffsetY: 0, intGridCsv: [0, 1, 2, 0, 0, 0, 3, 0] },
+      { __identifier: "Bg", __type: "Tiles", __cWid: 4, __cHei: 2, __gridSize: 16,
+        __pxTotalOffsetX: 0, __pxTotalOffsetY: 8,
+        gridTiles: [{ px: [0, 0], src: [16, 0], f: 1, d: [0, 5] }] },
+      { __identifier: "Deco", __type: "AutoLayer", __cWid: 4, __cHei: 2, __gridSize: 16,
+        __pxTotalOffsetX: 0, __pxTotalOffsetY: 0,
+        autoLayerTiles: [{ px: [32, 16], src: [0, 16], f: 0, d: [6, 9] }] },
+      { __identifier: "Things", __type: "Entities", __cWid: 4, __cHei: 2, __gridSize: 16,
+        __pxTotalOffsetX: 0, __pxTotalOffsetY: 0,
+        entityInstances: [{ __identifier: "Spawn", px: [16, 16], width: 16, height: 16,
+          fieldInstances: [{ __identifier: "hp", __value: 12 }] }] }
+    ]
+  }, { identifier: "Level_ext", uid: 8, pxWid: 32, pxHei: 32, layerInstances: null, externalRelPath: "Level_ext.ldtkl" }]
+};
+
+const ldtkProj = G.ldtk.parse(ldtkFixture);
+ok("ldtk: the json version is kept", ldtkProj.version === "1.5.3");
+ok("ldtk: levels are indexed by name and by uid",
+   ldtkProj.level("Level_0") === ldtkProj.levels[0] && ldtkProj.level(7) === ldtkProj.levels[0]);
+ok("ldtk: an unknown level is null", ldtkProj.level("nope") === null);
+
+const ldtkLvl = ldtkProj.level("Level_0");
+ok("ldtk: layers keep the editor's order", ldtkLvl.layers.map((l) => l.name).join(",") === "Walls,Bg,Deco,Things");
+ok("ldtk: draw order is the array reversed, because the first layer is top-most",
+   ldtkLvl.drawOrder()[0].name === "Things" && ldtkLvl.drawOrder()[3].name === "Walls");
+ok("ldtk: a layer by name, and null when there is none",
+   ldtkLvl.layer("Walls").type === "IntGrid" && ldtkLvl.layer("nope") === null);
+
+const ldtkWalls = ldtkLvl.layer("Walls");
+ok("ldtk: an IntGrid cell is read row-major", ldtkWalls.intAt(1, 0) === 1 && ldtkWalls.intAt(2, 1) === 3);
+ok("ldtk: an empty cell is 0, not a tile", ldtkWalls.intAt(0, 0) === 0);
+ok("ldtk: off the map is 0, never a crash",
+   ldtkWalls.intAt(-1, 0) === 0 && ldtkWalls.intAt(0, 9) === 0 && ldtkWalls.intAt(4, 0) === 0);
+
+const ldtkBg = ldtkLvl.layer("Bg").tiles()[0];
+ok("ldtk: a tile carries its source rectangle", ldtkBg.sx === 16 && ldtkBg.sy === 0);
+ok("ldtk: the layer offset is added to the tile position", ldtkBg.x === 0 && ldtkBg.y === 8);
+ok("ldtk: the flip bits survive", ldtkBg.flip === 1);
+ok("ldtk: the tile index and cell come from d", ldtkBg.tileId === 5 && ldtkBg.cell === 0);
+ok("ldtk: auto-layer tiles are read too", ldtkLvl.layer("Deco").tiles().length === 1);
+
+const ldtkEnt = ldtkLvl.layer("Things").entities()[0];
+ok("ldtk: an entity keeps its fields", ldtkEnt.name === "Spawn" && ldtkEnt.fields.hp === 12 && ldtkEnt.x === 16);
+
+ok("ldtk: a separately saved level has no layers and names its file",
+   ldtkProj.level("Level_ext").layers.length === 0 && ldtkProj.level("Level_ext").external === "Level_ext.ldtkl");
+
+ok("ldtk: a tileset is read from defs", ldtkProj.tilesets[3].grid === 16 && ldtkProj.tilesets[3].path === "tiles.png");
+const ldtkRect = ldtkProj.tileRect(3, 9);
+ok("ldtk: a tile index maps to a rectangle, padding and spacing included",
+   ldtkRect.x === 19 && ldtkRect.y === 19 && ldtkRect.w === 16);
+ok("ldtk: a tile index outside the sheet is null", ldtkProj.tileRect(3, 99) === null && ldtkProj.tileRect(99, 0) === null);
+
+let ldtkThrew = false;
+try { G.ldtk.parse({ levels: "no" }); } catch (e) { ldtkThrew = true; }
+ok("ldtk: a file that is not a project is refused", ldtkThrew);
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 if (fail) process.exit(1);

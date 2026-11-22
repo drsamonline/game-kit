@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.12.0 — 2026-11-22
+
+**`Game.ldtk`** — the reader for the other 2D level editor. `Game.tiled` has parsed Tiled
+since 1.2; LDtk stores levels as plain JSON and a game is as likely to meet it. Written
+from the format the project documents (JSON 1.5.3), not from memory of it.
+
+| Rule | Why |
+| --- | --- |
+| Layers are sorted top-most first | LDtk writes `layerInstances` in display order with the front layer first, so drawing the array as it comes paints the background over the player. `drawOrder()` is the reversed array |
+| An IntGrid cell is `0` = empty, values start at 1 | Reading `0` as a tile id fills every empty cell with tile 0, tiled across the whole map |
+| `px` is relative to the layer | A layer with an offset draws its tiles somewhere else unless `__pxTotalOffsetX/Y` is added; `tiles()` adds it |
+| `src` is the rectangle, `d[1]` is only an index | `tileRect(uid, id)` turns the index into pixels, with the tileset's spacing and padding |
+| `layerInstances` can be `null` | A project saving levels separately keeps them in `.ldtkl`; `external` names the file and `layers` is empty, not an error |
+
+Surface: `parse(json)`, `level(nameOrUid)`, `levels`, `tilesets`, `tileRect(uid, id)`;
+a level's `layers`, `layer(name)`, `drawOrder()`, `pxWid/pxHei`, `worldX/worldY`, `external`;
+a layer's `type`, `cw/ch`, `grid`, `intAt(x, z)`, `tiles()`, `entities()`.
+
+**Tests** — 20 new assertions, 334 total.
+
+
 ## 1.11.0 — 2026-11-22
 
 No library change. This release is what came out of auditing 30 "open-source games"
