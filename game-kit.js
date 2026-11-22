@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.5.0" };
+  var G = { version: "1.10.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -1831,6 +1831,634 @@
       gen: gen
     };
   })();
+
+  /* ---------- camera (v1.10) ----------
+     A view onto a world bigger than the screen: follow a target, hold it inside
+     a dead zone, refuse to show the void past the level's edge, and shake
+     without moving the thing you are looking at.
+
+     Five rules, each one a bug that shipped somewhere in the family:
+
+     1. THE SHAKE IS AN OFFSET, NEVER WRITTEN INTO x/y. Adding the wobble to the
+        camera's own position means it never fully comes back: the residual
+        accumulates and the level drifts a pixel per explosion until the map
+        edge is on screen. `offset()` is added at draw time and thrown away.
+     2. THE DEAD ZONE IS A BOX, NOT A POINT. Following the target exactly makes
+        a walking character tremble the whole world at sub-pixel speed. Inside
+        the box the camera does not move at all.
+     3. CLAMP AFTER FOLLOW, AND CENTRE A WORLD SMALLER THAN THE VIEW. Clamping a
+        320 px level into an 800 px view gives a negative range, and the naive
+        `min(max(x,lo),hi)` picks `hi` every frame — a level that will not sit
+        still. When the world is narrower than the view it is centred instead.
+     4. SMOOTHING IS dt-CORRECTED. `x += (target-x)*0.1` moves at a different
+        speed at 30 fps and at 144 fps. `1-(1-k)^(dt*60)` is the same curve on
+        every machine, and a replay on a slower device still lands the same.
+     5. A NaN TARGET IS IGNORED. An entity that is freed (or divided by a zero
+        scale) hands back NaN once, and NaN survives every lerp after it — the
+        camera is at NaN for the rest of the session. Refused at the door.
+  */
+  G.camera = function (opts) {
+    opts = opts || {};
+    var vw = opts.width > 0 ? opts.width : 800;
+    var vh = opts.height > 0 ? opts.height : 600;
+    var x = opts.x || 0, y = opts.y || 0;              // top-left of the view, world space
+    var bounds = opts.bounds || null;                   // { x, y, w, h } or null
+    var dead = opts.deadzone || null;                   // { x, y, w, h } in view space
+    var smooth = opts.smooth == null ? 1 : opts.smooth; // 1 = locked on, 0 = never moves
+    var shakeAmp = 0, shakeLeft = 0, shakeLen = 0;
+    var shakeRng = G.rng(opts.seed == null ? 1 : opts.seed);
+    var ox = 0, oy = 0;
+
+    function span(v, size, lo, hi) {
+      /* the world is smaller than the view: centre it, do not clamp it */
+      if (hi - lo <= size) return lo + (hi - lo - size) / 2;
+      return v < lo ? lo : (v > hi - size ? hi - size : v);
+    }
+
+    function applyBounds() {
+      if (!bounds) return;
+      x = span(x, vw, bounds.x, bounds.x + bounds.w);
+      y = span(y, vh, bounds.y, bounds.y + bounds.h);
+    }
+
+    var api = {
+      /* Move toward a target. `dt` is the fixed step, so the smoothing is the
+         same at any frame rate. Call it from update(), never from render(). */
+      follow: function (tx, ty, dt) {
+        if (typeof tx !== "number" || typeof ty !== "number") return api;
+        if (!isFinite(tx) || !isFinite(ty)) return api;     // rule 5
+        var wantX = x, wantY = y;
+        if (dead) {
+          var sx = tx - x, sy = ty - y;                     // where the target sits in the view
+          if (sx < dead.x) wantX = tx - dead.x;
+          else if (sx > dead.x + dead.w) wantX = tx - (dead.x + dead.w);
+          if (sy < dead.y) wantY = ty - dead.y;
+          else if (sy > dead.y + dead.h) wantY = ty - (dead.y + dead.h);
+        } else {
+          wantX = tx - vw / 2;
+          wantY = ty - vh / 2;
+        }
+        var k = smooth >= 1 ? 1 : 1 - Math.pow(1 - smooth, (dt > 0 ? dt : 0) * 60);
+        x += (wantX - x) * k;
+        y += (wantY - y) * k;
+        applyBounds();
+        return api;
+      },
+      /* Put a world point in the middle of the view, ignoring smoothing. */
+      centre: function (cx, cy) { x = cx - vw / 2; y = cy - vh / 2; applyBounds(); return api; },
+      moveTo: function (nx, ny) { x = nx; y = ny; applyBounds(); return api; },
+      setBounds: function (b) { bounds = b || null; applyBounds(); return api; },
+      resize: function (w, h) {
+        if (w > 0) vw = w;
+        if (h > 0) vh = h;
+        applyBounds();
+        return api;
+      },
+      /* A shake is amplitude in pixels and a duration in seconds. Restarting it
+         replaces the old one rather than adding to it, so ten explosions in one
+         frame do not shake the screen into next week. */
+      shake: function (amp, seconds) {
+        if (!(amp > 0) || !(seconds > 0)) return api;
+        shakeAmp = amp;
+        shakeLen = shakeLeft = seconds;
+        return api;
+      },
+      /* Advance the shake clock. The offset is a pure function of the seed and
+         the remaining time, so a replay shakes identically. */
+      update: function (dt) {
+        if (!(dt > 0)) return api;
+        if (shakeLeft > 0) {
+          shakeLeft -= dt;
+          if (shakeLeft <= 0) { shakeLeft = 0; ox = 0; oy = 0; return api; }
+          var f = shakeLeft / shakeLen;                    // linear falloff
+          ox = (shakeRng() * 2 - 1) * shakeAmp * f;
+          oy = (shakeRng() * 2 - 1) * shakeAmp * f;
+        }
+        return api;
+      },
+      /** The view rectangle without the shake — what you clamp and cull with. */
+      view: function () { return { x: x, y: y, w: vw, h: vh }; },
+      /** The shake offset for this frame — add it when you draw, do not store it. */
+      offset: function () { return { x: ox, y: oy }; },
+      position: function () { return { x: x, y: y }; },
+      /** Translate a context so world coordinates draw correctly. Call it inside save/restore. */
+      apply: function (ctx) { if (ctx && ctx.translate) ctx.translate(-(x + ox), -(y + oy)); return ctx; },
+      /* The shake is included here on purpose: what you pick with must be where
+         the player saw the thing, not where it would have been unshaken. */
+      toScreen: function (wx, wy) { return { x: wx - x - ox, y: wy - y - oy }; },
+      toWorld: function (sx, sy) { return { x: sx + x + ox, y: sy + y + oy }; },
+      /** Is a world box on screen? `margin` widens the test so sprites do not pop at the edge. */
+      visible: function (box, margin) {
+        var m = margin || 0;
+        return box.x + box.w >= x - m && box.x <= x + vw + m &&
+               box.y + box.h >= y - m && box.y <= y + vh + m;
+      },
+      isShaking: function () { return shakeLeft > 0; }
+    };
+    applyBounds();
+    return api;
+  };
+
+  /* ---------- sprite animation (v1.10) ----------
+     A clip player over frame names an atlas already knows. `Art.anim` answers
+     "which frame at time t" as a pure function; this one keeps the state a game
+     needs: which clip is playing, how far in, whether it has finished, and the
+     events a clip fires on the way through (a footstep on frame 3).
+
+     Four rules:
+
+     1. `fps: 0` FREEZES THE CLIP, it does not divide by zero. A clip whose
+        speed is set from a stat (an idle whose rate is 0 while stunned) used to
+        render frame `NaN`, which is the whole sheet at once or nothing at all.
+     2. RE-PLAYING THE CLIP YOU ARE ALREADY IN DOES NOT RESTART IT. A state
+        machine that sends "walk" every frame would otherwise pin the walk cycle
+        to frame 0 and the character would moonwalk. `{ restart: true }` says
+        you mean it.
+     3. `once` HOLDS THE LAST FRAME AND REPORTS `done()`. It does not wrap to
+        frame 0 (a death animation that pops back to standing) and it does not
+        return undefined (a sprite that vanishes).
+     4. AN EVENT FIRES WHEN THE CLIP ENTERS A FRAME, once, including when the
+        loop wraps into it — not once per update while it is there, which is a
+        footstep every frame at 144 fps.
+  */
+  G.anim = function (opts) {
+    opts = opts || {};
+    var clips = {};
+    var t = 0, name = null, clip = null, order = null, lastIndex = -1;
+    var speed = 1, finished = false;
+
+    function prep(c) {
+      var frames = c.frames || [];
+      if (c.loop === "pingpong" && frames.length > 2) {
+        var o = [];
+        var i;
+        for (i = 0; i < frames.length; i++) o.push(i);
+        for (i = frames.length - 2; i > 0; i--) o.push(i);
+        return o;
+      }
+      return null;
+    }
+
+    function indexAt(seconds) {
+      var frames = clip.frames, n = frames.length;
+      var fps = clip.fps > 0 ? clip.fps : 0;
+      if (!n) return -1;
+      if (!fps) return 0;                                   // rule 1
+      var len = order ? order.length : n;
+      var pos = Math.floor(seconds * fps);
+      if (pos < 0) pos = 0;
+      if (clip.loop === "once") return pos >= len ? len - 1 : pos;
+      var i = pos % len;
+      return order ? order[i] : i;
+    }
+
+    function duration() {
+      if (!clip) return 0;
+      var n = (order || clip.frames || []).length;
+      return clip.fps > 0 ? n / clip.fps : 0;
+    }
+
+    function fire(c, idx) {
+      if (!c.events) return;
+      var ev = c.events[idx];
+      if (ev == null) return;
+      if (c.onEvent) c.onEvent(ev, idx, c.frames[idx]);
+    }
+
+    var api = {
+      add: function (id, c) {
+        clips[id] = c;
+        if (id === name) { clip = c; order = prep(c); }
+        return api;
+      },
+      /* Start a clip. Same clip, no restart: keep the phase (rule 2). */
+      play: function (id, o) {
+        var c = clips[id];
+        if (!c) return api;
+        var again = id === name;
+        if (again && !(o && o.restart)) return api;
+        name = id;
+        clip = c;
+        order = prep(c);
+        t = 0;
+        lastIndex = -1;
+        finished = false;
+        if (c.onStart) c.onStart(id);
+        var i0 = indexAt(0);
+        lastIndex = i0;
+        fire(c, i0);
+        return api;
+      },
+      update: function (dt) {
+        if (!clip || finished || !(dt > 0)) return api;
+        t += dt * speed;
+        var i = indexAt(t);
+        if (clip.loop === "once" && t >= duration()) {
+          t = duration();
+          finished = true;
+          i = indexAt(t);
+          if (i !== lastIndex) { lastIndex = i; fire(clip, i); }
+          if (clip.onEnd) clip.onEnd(name);
+          return api;
+        }
+        if (i !== lastIndex) { lastIndex = i; fire(clip, i); }
+        return api;
+      },
+      stop: function () { clip = null; name = null; t = 0; lastIndex = -1; finished = false; return api; },
+      /** The frame name to draw, or null when nothing is playing. */
+      frame: function () { return clip ? clip.frames[indexAt(t)] : null; },
+      /** A pure read: the frame this clip would show at time `seconds`. */
+      frameAt: function (seconds) { return clip ? clip.frames[indexAt(seconds)] : null; },
+      index: function () { return clip ? indexAt(t) : -1; },
+      name: function () { return name; },
+      time: function () { return t; },
+      duration: duration,
+      progress: function () { var d = duration(); return d > 0 ? Math.min(1, t / d) : 0; },
+      done: function () { return finished; },
+      /** 0 pauses the clip; a negative speed is allowed and runs it backwards. */
+      setSpeed: function (s) { if (isFinite(s)) speed = s; return api; },
+      speed: function () { return speed; },
+      clips: function () { var out = []; for (var k in clips) if (clips.hasOwnProperty(k)) out.push(k); return out; }
+    };
+    if (opts.clips) { for (var id in opts.clips) if (opts.clips.hasOwnProperty(id)) api.add(id, opts.clips[id]); }
+    if (opts.start) api.play(opts.start);
+    return api;
+  };
+
+  /* ---------- A* pathfinding (v1.10) ----------
+     `flowField` is one target and every chaser on the floor; this is the other
+     half: an arbitrary target, asked once, for a path that is optimal and the
+     same every run.
+
+     Four rules:
+
+     1. UNREACHABLE IS `null`, NOT `[]`. An empty path reads as "you are
+        already there" and the enemy stands still next to the wall it cannot
+        cross, looking broken. `null` means no path exists.
+     2. NO CUTTING THE CORNER. Two walls touching at a diagonal are a wall. A
+        8-way search that only asks whether the *destination* cell is free walks
+        agents through the seam between two blocks, every time.
+     3. THE TIE-BREAK IS THE CELL INDEX, so the same map and the same pair of
+        points give byte-identical paths on every run and every device. A replay
+        that re-paths differently is a desync.
+     4. THERE IS A NODE BUDGET. A path across a 512×512 map with no route is
+        half a million expansions, and it runs inside the frame that asked for
+        it — the game hitches, then the tab dies. Past the budget it returns
+        `null` and says `exhausted`, and the caller can fall back to the flow
+        field or to "wander".
+  */
+  G.astar = function (opts) {
+    opts = opts || {};
+    var w = opts.width | 0, h = opts.height | 0;
+    var blocked = opts.blocked || function () { return false; };
+    var diagonal = !!opts.diagonal;
+    var budget = opts.budget > 0 ? opts.budget : 20000;
+    var SQRT2 = 1.4142135623730951;
+    var expanded = 0, exhausted = false;
+
+    function find(sx, sz, tx, tz) {
+      expanded = 0; exhausted = false;
+      if (w <= 0 || h <= 0) return null;
+      if (sx < 0 || sz < 0 || tx < 0 || tz < 0 || sx >= w || sz >= h || tx >= w || tz >= h) return null;
+      if (blocked(tx, tz)) return null;                       // a goal inside a wall has no path
+      if (sx === tx && sz === tz) return { path: [], cost: 0, expanded: 0, exhausted: false };
+
+      var n = w * h;
+      var g = new Float64Array(n);
+      var f = new Float64Array(n);
+      var from = new Int32Array(n);
+      var closed = new Uint8Array(n);
+      var seen = new Uint8Array(n);
+      for (var i = 0; i < n; i++) { g[i] = Infinity; from[i] = -1; }
+
+      function heur(x, z) {
+        var dx = Math.abs(x - tx), dz = Math.abs(z - tz);
+        return diagonal ? (dx + dz) + (SQRT2 - 2) * Math.min(dx, dz) : dx + dz;
+      }
+
+      /* binary heap of cell indices, ordered by f then by h then by index */
+      var heap = [];
+      function less(a, b) {
+        if (f[a] !== f[b]) return f[a] < f[b];
+        var ha = heur(a % w, (a - (a % w)) / w), hb = heur(b % w, (b - (b % w)) / w);
+        if (ha !== hb) return ha < hb;
+        return a < b;
+      }
+      function push(v) {
+        heap.push(v);
+        var c = heap.length - 1;
+        while (c > 0) {
+          var p = (c - 1) >> 1;
+          if (less(heap[c], heap[p])) { var tmp = heap[c]; heap[c] = heap[p]; heap[p] = tmp; c = p; }
+          else break;
+        }
+      }
+      function pop() {
+        var top = heap[0], end = heap.pop();
+        if (heap.length) {
+          heap[0] = end;
+          var c = 0;
+          for (;;) {
+            var l = c * 2 + 1, r = l + 1, best = c;
+            if (l < heap.length && less(heap[l], heap[best])) best = l;
+            if (r < heap.length && less(heap[r], heap[best])) best = r;
+            if (best === c) break;
+            var t2 = heap[c]; heap[c] = heap[best]; heap[best] = t2; c = best;
+          }
+        }
+        return top;
+      }
+
+      var start = sz * w + sx, goal = tz * w + tx;
+      g[start] = 0;
+      f[start] = heur(sx, sz);
+      seen[start] = 1;
+      push(start);
+
+      var DX = diagonal ? [1, -1, 0, 0, 1, 1, -1, -1] : [1, -1, 0, 0];
+      var DZ = diagonal ? [0, 0, 1, -1, 1, -1, 1, -1] : [0, 0, 1, -1];
+
+      while (heap.length) {
+        var cur = pop();
+        if (closed[cur]) continue;
+        closed[cur] = 1;
+        expanded++;
+        if (cur === goal) break;
+        if (expanded > budget) { exhausted = true; return null; }
+
+        var cx = cur % w, cz = (cur - cx) / w;
+        for (var d = 0; d < DX.length; d++) {
+          var nx = cx + DX[d], nz = cz + DZ[d];
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          var nk = nz * w + nx;
+          if (closed[nk]) continue;
+          if (blocked(nx, nz)) continue;
+          var stepCost = (DX[d] !== 0 && DZ[d] !== 0) ? SQRT2 : 1;
+          if (stepCost > 1) {
+            /* rule 2: both orthogonal neighbours must be free to move diagonally */
+            if (blocked(nx, cz) || blocked(cx, nz)) continue;
+          }
+          var ng = g[cur] + stepCost;
+          if (ng < g[nk]) {
+            g[nk] = ng;
+            from[nk] = cur;
+            f[nk] = ng + heur(nx, nz);
+            seen[nk] = 1;
+            push(nk);
+          }
+        }
+      }
+
+      if (!closed[goal]) return null;
+      var path = [];
+      var k = goal;
+      while (k !== start && k !== -1) {
+        var px = k % w;
+        path.push({ x: px, z: (k - px) / w });
+        k = from[k];
+      }
+      path.reverse();
+      return { path: path, cost: g[goal], expanded: expanded, exhausted: false };
+    }
+
+    return {
+      width: w,
+      height: h,
+      /** `{ path, cost, expanded }`, or `null` when there is no route. */
+      find: find,
+      /** The path array alone, or `null` — the common case, one call. */
+      path: function (sx, sz, tx, tz) { var r = find(sx, sz, tx, tz); return r ? r.path : null; },
+      stats: function () { return { expanded: expanded, exhausted: exhausted, budget: budget }; }
+    };
+  };
+
+  /* ---------- particles (v1.10) ----------
+     Sparks, smoke, blood, confetti, muzzle flashes — the thing every game needs
+     and every game writes again. Pooled, seeded and capped, so a long session
+     does not grow the heap and a replay throws the same sparks twice.
+
+     Three rules:
+
+     1. WHEN THE POOL IS FULL THE OLDEST PARTICLE DIES. Dropping the newest
+        means a fresh muzzle flash is swallowed by a second of old smoke, and
+        the shot looks like it did not fire.
+     2. A PARTICLE IS BORN WITH A POSITION. A pool that hands back a recycled
+        object still carrying its old coordinates draws the first frame of every
+        burst at wherever the last one died — usually the corner of the map.
+     3. THE RANDOMNESS IS SEEDED. `Math.random` in an emitter is a replay that
+        looks different from the run it recorded.
+  */
+  G.particles = function (opts) {
+    opts = opts || {};
+    var cap = opts.cap > 0 ? opts.cap : 512;
+    var rng = G.rng(opts.seed == null ? 1 : opts.seed);
+    var gravity = opts.gravity || 0;
+    var drag = opts.drag == null ? 0 : opts.drag;        // fraction of speed lost per second
+    var live = [];
+    var spawned = 0, expired = 0, recycled = 0;
+
+    var pool = G.pool({
+      cap: cap,
+      make: function () { return { x: 0, y: 0, vx: 0, vy: 0, age: 0, life: 0, size: 1, colour: 0, rot: 0, spin: 0 }; },
+      reset: function (p) { p.age = 0; p.life = 0; p.x = p.y = p.vx = p.vy = 0; p.size = 1; p.colour = 0; p.rot = 0; p.spin = 0; }
+    });
+
+    function pick(v, dflt) {
+      if (v == null) return dflt;
+      if (typeof v === "number") return v;
+      if (v.length === 1) return v[0];
+      return v[0] + rng() * (v[1] - v[0]);
+    }
+
+    function killAt(i) {
+      var p = live[i];
+      live[i] = live[live.length - 1];
+      live.pop();
+      pool.release(p);
+      expired++;
+    }
+
+    var api = {
+      cap: cap,
+      /* Throw `count` particles. Every range is [min, max]; every field is optional. */
+      burst: function (o) {
+        o = o || {};
+        var count = o.count == null ? 1 : (o.count | 0);
+        if (!(count > 0)) return 0;
+        var made = 0;
+        for (var i = 0; i < count; i++) {
+          var life = pick(o.life, 0.6);
+          if (!(life > 0)) continue;                     // a zero-life particle is not a particle
+          var p = pool.acquire();
+          if (!p) {                                       // rule 1: the oldest goes, not this one
+            if (!live.length) return made;
+            killAt(0);
+            recycled++;
+            p = pool.acquire();
+            if (!p) return made;
+          }
+          var angle = o.angle == null ? rng() * Math.PI * 2
+                    : o.angle + (rng() - 0.5) * (o.spread == null ? 0 : o.spread);
+          var sp = pick(o.speed, 60);
+          p.x = (o.x || 0) + (o.jitter ? (rng() - 0.5) * o.jitter : 0);
+          p.y = (o.y || 0) + (o.jitter ? (rng() - 0.5) * o.jitter : 0);
+          p.vx = Math.cos(angle) * sp;
+          p.vy = Math.sin(angle) * sp;
+          p.age = 0;
+          p.life = life;
+          p.size = pick(o.size, 2);
+          p.colour = o.colour == null ? 0 : (Array.isArray(o.colour) ? o.colour[Math.floor(rng() * o.colour.length) % o.colour.length] : o.colour);
+          p.spin = pick(o.spin, 0);
+          p.rot = 0;
+          live.push(p);
+          spawned++;
+          made++;
+        }
+        return made;
+      },
+      update: function (dt) {
+        if (!(dt > 0)) return api;
+        var damp = drag > 0 ? Math.pow(1 - Math.min(0.99, drag), dt) : 1;
+        for (var i = live.length - 1; i >= 0; i--) {
+          var p = live[i];
+          p.age += dt;
+          if (p.age >= p.life) { killAt(i); continue; }
+          p.vy += gravity * dt;
+          p.vx *= damp;
+          p.vy *= damp;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.rot += p.spin * dt;
+        }
+        return api;
+      },
+      /* Visit every live particle. Mutating the list inside is not allowed. */
+      each: function (fn) {
+        for (var i = 0; i < live.length; i++) fn(live[i], 1 - live[i].age / live[i].life);
+        return live.length;
+      },
+      count: function () { return live.length; },
+      clear: function () { while (live.length) killAt(live.length - 1); return api; },
+      stats: function () { return { spawned: spawned, expired: expired, recycled: recycled, live: live.length, cap: cap }; }
+    };
+    return api;
+  };
+
+  /* ---------- replay (v1.10) ----------
+     Record the input of a fixed-step run and play it back exactly. The loop is
+     already deterministic and the RNG is already seeded, so the only thing
+     missing was a record of what the player did, one frame at a time.
+
+     Four rules:
+
+     1. ONE SNAPSHOT PER FIXED STEP, not per rendered frame. A recording made in
+        the render callback has more frames on a fast machine than on a slow
+        one, and playback runs the game at a speed that never existed.
+     2. THE SNAPSHOT IS COPIED. An input object handed to `frame()` is the same
+        object the next update mutates — record it by reference and every frame
+        of the replay holds the *last* key you pressed.
+     3. THE STEP AND THE SEED TRAVEL WITH THE FILE. The same inputs at a
+        different step, or from a different seed, are a different game. Loading
+        one into the other is refused rather than silently wrong.
+     4. A CHECKPOINT IS HOW YOU CATCH A DESYNC. Store a hash of the world every
+        few seconds; on playback, compare. A replay that diverges at frame 900
+        and is noticed at frame 4000 has told you nothing.
+  */
+  G.replay = function (opts) {
+    opts = opts || {};
+    var step = opts.step > 0 ? opts.step : 1 / 60;
+    var seed = opts.seed | 0;
+    var frames = [];
+    var checks = [];
+    var at = 0;
+
+    function copy(v) {
+      if (v == null) return null;
+      if (Array.isArray(v)) return v.slice();
+      if (typeof v === "object") {
+        var out = {}, k;
+        for (k in v) if (v.hasOwnProperty(k)) out[k] = v[k];
+        return out;
+      }
+      return v;
+    }
+
+    return {
+      step: step,
+      seed: seed,
+      /* Call once per fixed update, with this step's input. */
+      frame: function (input) { frames.push(copy(input)); return frames.length; },
+      checkpoint: function (hash) { checks.push({ frame: frames.length, hash: hash }); return this; },
+      length: function () { return frames.length; },
+      /* Runs of identical frames collapse, so a five-minute idle demo is a few bytes. */
+      export: function () {
+        var runs = [];
+        var i;
+        for (i = 0; i < frames.length; i++) {
+          var key = JSON.stringify(frames[i]);
+          if (runs.length && runs[runs.length - 1][0] === key) runs[runs.length - 1][1]++;
+          else runs.push([key, 1]);
+        }
+        return {
+          format: "game-kit.replay", version: 1,
+          step: step, seed: seed, count: frames.length,
+          runs: runs, checks: checks.slice()
+        };
+      },
+      reset: function () { frames = []; checks = []; at = 0; return this; }
+    };
+  };
+
+  /* Read a replay back. `ok:false` with a `reason` when the file cannot be
+     trusted — a mismatch is refused, not repaired. */
+  G.replay.load = function (data) {
+    if (!data || data.format !== "game-kit.replay") return { ok: false, reason: "not a game-kit replay" };
+    if (data.version !== 1) return { ok: false, reason: "unsupported version " + data.version };
+    if (!Array.isArray(data.runs)) return { ok: false, reason: "no frames" };
+    function copy(x) {
+      if (x == null) return null;
+      if (Array.isArray(x)) return x.slice();
+      if (typeof x === "object") { var o = {}, k; for (k in x) if (x.hasOwnProperty(k)) o[k] = x[k]; return o; }
+      return x;
+    }
+    var frames = [];
+    var i, j;
+    for (i = 0; i < data.runs.length; i++) {
+      var run = data.runs[i];
+      if (!Array.isArray(run) || typeof run[0] !== "string" || !(run[1] > 0)) return { ok: false, reason: "malformed run " + i };
+      var v = JSON.parse(run[0]);
+      for (j = 0; j < run[1]; j++) frames.push(copy(v));
+    }
+    if (data.count != null && frames.length !== data.count) return { ok: false, reason: "frame count does not match" };
+    var at = 0;
+    var checks = data.checks || [];
+    return {
+      ok: true,
+      step: data.step,
+      seed: data.seed,
+      length: frames.length,
+      /** The input for this step, or `null` when the recording is over. */
+      next: function () { return at < frames.length ? copy(frames[at++]) : null; },
+      peek: function () { return at < frames.length ? copy(frames[at]) : null; },
+      index: function () { return at; },
+      reset: function () { at = 0; return this; },
+      seek: function (n) { at = Math.max(0, Math.min(frames.length, n | 0)); return this; },
+      /** Does the world still match what was recorded at this frame? */
+      verify: function (frame, hash) {
+        for (var k = 0; k < checks.length; k++) {
+          if (checks[k].frame === frame) return checks[k].hash === hash;
+        }
+        return null;                                  // nothing was recorded there
+      },
+      /** Refuse a replay recorded at another step before you run it. */
+      matches: function (o) {
+        o = o || {};
+        if (o.step != null && o.step !== data.step) return false;
+        if (o.seed != null && o.seed !== data.seed) return false;
+        return true;
+      }
+    };
+  };
 
   root.Game = G;
 })(typeof globalThis !== "undefined" ? globalThis : this);

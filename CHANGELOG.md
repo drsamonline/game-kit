@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.10.0 — 2026-11-22
+
+Five modules taken from a survey of the open-source game world rather than from one more
+shipped game. The survey — 439 entries of
+[awesome-open-source-games](https://github.com/michelpereira/awesome-open-source-games),
+and what was deliberately *not* taken — is [docs/PRIOR-ART.md](docs/PRIOR-ART.md).
+
+**`Game.camera`** — a view onto a world bigger than the screen.
+
+| Rule | Why |
+| --- | --- |
+| The shake is an offset, never written into `x`/`y` | Added to the position it leaves a residual that never comes back; the level drifts a pixel per explosion |
+| The dead zone is a box, not a point | Following the target exactly trembles the whole world at walking speed |
+| Clamp after follow; centre a world smaller than the view | Clamping a 320 px level into an 800 px view gives a negative range and the level will not sit still |
+| Smoothing is dt-corrected | `1-(1-k)^(dt*60)` is the same curve at 30 fps and at 144 fps |
+| A NaN target is ignored | One NaN survives every lerp after it, and the camera is lost for the session |
+
+**`Game.anim`** — a clip player over the frame names an atlas already knows. `fps: 0` freezes
+instead of dividing by zero; re-playing the clip you are in keeps its phase (`{ restart: true }`
+says you mean it); `once` holds the last frame and reports `done()`; an event fires when the
+clip *enters* a frame, not once per update.
+
+**`Game.astar`** — an arbitrary target, the other half of `Game.flowField`. Unreachable is
+`null`, not `[]`; a diagonal may not cut the corner between two walls; the tie-break is the
+cell index so a replay re-paths identically; and a node `budget` returns `null` with
+`exhausted` instead of hitching the frame.
+
+**`Game.particles`** — pooled, seeded, capped. When the cap is reached the *oldest* particle
+dies, so a fresh muzzle flash is not swallowed by old smoke, and a recycled particle is born
+at the burst rather than where the last one died.
+
+**`Game.replay`** — one input snapshot per fixed step, run-length encoded, with the step and
+the seed travelling with the file and checkpoints to catch a desync where it happens. It
+could not exist before this release: it needs the fixed step (v1) and the seeded RNG (v2).
+
+**Also** — `Game.version` in the source now matches `VERSION` (it had drifted to `1.5.0`);
+`docs/API.md` had drifted to 1.8.0 and is now 1.10.0.
+
+**Tests** — 57 new assertions, 314 total: the camera's dead zone, clamp, small-world centring,
+shake determinism, picking during a shake and 60 fps vs 30 fps; the clip player's wrap,
+`once`, `pingpong`, frozen `fps: 0`, events on entry and no-restart; A* around a wall, a
+sealed goal, a refused corner cut, the budget and the same path twice; particles' gravity,
+life, cap and seed; replays' run collapsing, copying, step mismatch, checkpoints and a
+truncated tape.
+
+
 ## 1.9.0 — 2026-11-21
 
 Four things extracted from a shipped game (HELLGATE) that every game re-writes badly.

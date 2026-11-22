@@ -32,10 +32,20 @@ engine every small browser game was re-implementing, extracted once from
 - **object pooling** *(v1.9)* — `Game.pool`: bullets, particles and corpses that are created and destroyed thousands of times a minute. A hard `cap`, reuse before allocation, and `stats()` so you size the pool from evidence.
 - **a minimap** *(v1.9)* — `Game.minimap`: the floor plan prerendered once into an offscreen canvas, then a blit plus your markers. A minimap that redraws every wall every frame costs more than the game.
 - **generative music** *(v1.9)* — `Game.audio.gen`: a minor pentatonic, a tempo and a rule for the next note, with an intensity your game feeds in. The sequencer plays what you wrote; this writes it.
+- **a camera** *(v1.10)* — `Game.camera`: follow with a **dead zone**, clamp to the level (a world smaller than the view is centred, not clamped), a shake that is an **offset and never written into the position**, and `toScreen`/`toWorld` that include the shake so picking matches what was drawn.
+- **sprite animation** *(v1.10)* — `Game.anim`: clips over atlas frame names with `loop` / `once` / `pingpong`, per-frame **events** (a footstep on frame 3), `done()` that holds the last frame, and `fps: 0` that freezes instead of dividing by zero.
+- **A\* pathfinding** *(v1.10)* — `Game.astar`: an arbitrary target, no **corner cutting** between two walls, a deterministic tie-break so a replay re-paths identically, and a **node budget** so a hopeless search cannot eat the frame. `null`, never `[]`, when there is no route.
+- **particles** *(v1.10)* — `Game.particles`: pooled, seeded and capped. When the budget is full the **oldest** particle dies, so a fresh muzzle flash is not swallowed by old smoke.
+- **replays** *(v1.10)* — `Game.replay`: one input snapshot per **fixed step**, run-length encoded, with the seed and the step travelling with the file, and checkpoints so a desync is caught where it happens.
 - **code-audio** *(v1.4)* — `Game.audio`: pitches from names, seeded oscillators, ADSR that cannot click, a pattern grid (`bpm` + `seq`) rendered to a `Float32Array`, five SFX presets as data, and `play(ctx, samples)` as the only browser-dependent line. **Game music is patterns, not files.**
 
 Every one of those exists because a shipped game got it wrong first. The stories are in
 [**docs/PLAYBOOK.md**](docs/PLAYBOOK.md) — eleven rules, each tied to the bug that taught it.
+
+Where each module sits against the wider open-source game world — and what was
+deliberately left out — is [**docs/PRIOR-ART.md**](docs/PRIOR-ART.md), a survey of the
+439-entry [awesome-open-source-games](https://github.com/michelpereira/awesome-open-source-games)
+catalogue: about fifteen recurring problems behind a few hundred games.
 
 ## Scene graph *(v1.5)*
 
@@ -213,11 +223,67 @@ The kit absorbed the engine patterns every small browser game rebuilds:
 
 Every addition is reimplemented from the idea, not copied.
 
+## Camera, animation, paths, particles, replays *(v1.10)*
+
+Five things every game in the family wrote again, taken from the catalogue of open-source
+games rather than from one more game.
+
+```js
+const cam = Game.camera({ width: 800, height: 600, seed: 7,
+  bounds: { x: 0, y: 0, w: 4000, h: 3000 },
+  deadzone: { x: 300, y: 200, w: 200, h: 200 },   // the target may wander inside this box
+  smooth: 0.2 });                                  // dt-corrected: same at 30 fps and 144 fps
+
+cam.follow(player.x, player.y, dt);   // from update(), never from render()
+cam.shake(6, 0.25);                   // amplitude, seconds — an offset, not a position
+cam.update(dt);
+cam.apply(ctx);                       // inside save()/restore()
+cam.toWorld(mouse.x, mouse.y);        // includes the shake: pick what the player saw
+
+const hero = Game.anim({ clips: {
+  idle: { frames: ["i0", "i1"], fps: 4, loop: true },
+  walk: { frames: ["w0", "w1", "w2", "w1"], fps: 10, loop: true },
+  die:  { frames: ["d0", "d1", "d2"], fps: 8, loop: "once", onEnd: respawn },
+  step: { frames: ["w0", "w1", "w2"], fps: 10, loop: true,
+          events: { 1: "footstep" }, onEvent: (e) => play("step") }
+} });
+hero.play("walk");                    // playing "walk" again keeps the phase
+hero.update(dt);
+draw(atlas, hero.frame());
+
+const route = Game.astar({ width: 64, height: 64, diagonal: true,
+  blocked: (x, z) => map.solid(x, z), budget: 20000 }).path(sx, sz, tx, tz);
+// -> [{ x, z }, ...] or null. No corner cutting, same path every run.
+
+const sparks = Game.particles({ cap: 256, seed: 3, gravity: 400, drag: 0.9 });
+sparks.burst({ x: hit.x, y: hit.y, count: 12, speed: [40, 160], life: [0.2, 0.6], colour: [1, 2, 3] });
+sparks.update(dt);
+sparks.each((p, alpha) => drawSpark(p, alpha));
+
+const rec = Game.replay({ seed: 42, step: 1 / 60 });
+rec.frame(input.snapshot());          // once per fixed update
+const tape = rec.export();            // { step, seed, runs, checks }
+
+const play = Game.replay.load(tape);
+if (!play.matches({ step: 1 / 60 })) throw new Error("recorded at another step");
+const thisFrame = play.next();        // null when the tape ends
+```
+
+- **The shake never touches the camera's position.** Added to `x`/`y` it accumulates a
+  residual that never comes back, and the level drifts a pixel per explosion.
+- **A world smaller than the view is centred.** Clamping a 320 px level into an 800 px
+  view gives a negative range, and the level will not sit still.
+- **A\* returns `null`, not `[]`,** when there is no route — an empty path reads as
+  "you are already there".
+- **The oldest particle dies** when the cap is reached, so a new burst is always visible.
+- **A replay needs the fixed step and the seed it was recorded with**, which is why it
+  could not exist before v1.10.
+
 ## Verified
 
 ```
 node test-node.js
-257 passed, 0 failed
+314 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
@@ -227,7 +293,12 @@ per primitive, a physics resolution case, the voxel and Tiled layer, sprite
 batching (spill, z-order, culling, misses), code-audio (declick, normalise,
 articulation) and the scene graph (compose, cache invalidation, refused cycles,
 a 20,000-deep chain, mid-walk mutation, singular transforms) — all headless, no
-browser.
+browser. v1.10 adds the camera (dead zone, clamp, a world smaller than the view,
+shake determinism, picking during a shake, 60 fps vs 30 fps), the clip player
+(wrap, `once`, `pingpong`, frozen `fps: 0`, events on entry, no restart on replay),
+A\* (a wall walked around, a sealed goal, no corner cutting, the node budget, the
+same path twice), particles (gravity, life, the cap, the same seed) and replays
+(collapse, copy, step mismatch, checkpoints, a truncated tape).
 
 ## Games built with game-kit
 

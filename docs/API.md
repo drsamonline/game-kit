@@ -1,6 +1,6 @@
 # game-kit — API reference
 
-**Version 1.8.0.** **The shared game core for drsamonline apps.** Zero dependencies. The common engine every small browser game was re-implementing, extracted once from `neon-engine` and `Aethelgard-Engine`.
+**Version 1.10.0.** **The shared game core for drsamonline apps.** Zero dependencies. The common engine every small browser game was re-implementing, extracted once from `neon-engine` and `Aethelgard-Engine`.
 
 Generated from the source in this repository: every name, argument and
 note below is read out of the kit file, so it cannot describe a function
@@ -12,7 +12,7 @@ Kit.clamp(...)
 // or: const Kit = require('./game-kit.js')
 ```
 
-## The surface (34 entries)
+## The surface (45 entries)
 
 | Name | Arguments | What it does |
 |---|---|---|
@@ -53,6 +53,12 @@ Kit.clamp(...)
 | `Kit.minimap` | `(canvas, opts)` | floor plan prerendered once, then a blit plus your markers |
 | `Kit.audio.gen` | `(opts)` | generative music: scale, tempo, `setIntensity`, `drain()` |
 | `Kit.audio.genScale` | `(octaves)` | the minor pentatonic the generator walks |
+| `Kit.camera` | `(opts)` | follow with a dead zone, clamp to the level, a shake that is an offset — `toScreen`/`toWorld` include it |
+| `Kit.anim` | `(opts)` | clip player over atlas frames: `loop`/`once`/`pingpong`, per-frame events, `done()` holds the last frame |
+| `Kit.astar` | `(opts)` | A* to an arbitrary target: no corner cutting, deterministic tie-break, node `budget`, `null` when unreachable |
+| `Kit.particles` | `(opts)` | pooled, seeded emitter: `burst`, `update`, `each`; the oldest particle dies at the cap |
+| `Kit.replay` | `(opts)` | record one input snapshot per fixed step; `export()` run-length encodes and carries step + seed |
+| `Kit.replay.load` | `(data)` | read a tape back; `ok:false` with a `reason` rather than a repair |
 | `Kit.Node` | `(props)` | / |
 | `Kit.node` | `(props)` | — |
 

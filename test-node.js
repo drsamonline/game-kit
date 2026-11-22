@@ -845,6 +845,217 @@ ok("music: drain empties the queue", gen.drain().length === 0);
 gen.stop();
 ok("music: stopped means nothing queues", gen.update(10) === 0);
 
+// ---- v1.10: camera ----------------------------------------------------------
+const cam = G.camera({ width: 800, height: 600 });
+cam.follow(500, 400, 1 / 60);
+ok("camera: a locked camera centres the target", cam.view().x === 100 && cam.view().y === 100);
+
+const dz = G.camera({ width: 800, height: 600, deadzone: { x: 300, y: 200, w: 200, h: 200 } });
+dz.centre(400, 300);
+const beforeDz = dz.view();
+dz.follow(420, 310, 1 / 60);
+ok("camera: a target inside the dead zone does not move the view",
+   dz.view().x === beforeDz.x && dz.view().y === beforeDz.y);
+dz.follow(700, 310, 1 / 60);
+ok("camera: a target past the dead zone pushes it to the edge", dz.view().x === 200);
+
+const bnd = G.camera({ width: 800, height: 600, bounds: { x: 0, y: 0, w: 2000, h: 1200 } });
+bnd.centre(0, 0);
+ok("camera: the view never shows past the left/top edge", bnd.view().x === 0 && bnd.view().y === 0);
+bnd.centre(2000, 1200);
+ok("camera: the view never shows past the right/bottom edge", bnd.view().x === 1200 && bnd.view().y === 600);
+
+const small = G.camera({ width: 800, height: 600, bounds: { x: 0, y: 0, w: 400, h: 300 } });
+ok("camera: a world smaller than the view is centred, not clamped to an edge",
+   small.view().x === -200 && small.view().y === -150);
+
+const shk = G.camera({ width: 800, height: 600, seed: 9 });
+shk.shake(10, 0.2);
+shk.update(1 / 60);
+const shkOff = shk.offset();
+ok("camera: a shake moves the offset, not the position",
+   (shkOff.x !== 0 || shkOff.y !== 0) && shk.view().x === 0 && shk.view().y === 0);
+ok("camera: picking uses the shaken view", shk.toScreen(0, 0).x === -shkOff.x);
+const rt = shk.toWorld(shk.toScreen(37, 41).x, shk.toScreen(37, 41).y);
+ok("camera: world -> screen -> world round-trips", Math.abs(rt.x - 37) < 1e-9 && Math.abs(rt.y - 41) < 1e-9);
+shk.update(1);
+ok("camera: the shake ends exactly at zero", shk.offset().x === 0 && shk.offset().y === 0 && !shk.isShaking());
+
+const shkA = G.camera({ width: 800, height: 600, seed: 4 });
+const shkB = G.camera({ width: 800, height: 600, seed: 4 });
+shkA.shake(8, 0.5); shkB.shake(8, 0.5);
+shkA.update(1 / 60); shkB.update(1 / 60);
+ok("camera: a shake is reproducible from its seed",
+   shkA.offset().x === shkB.offset().x && shkA.offset().y === shkB.offset().y);
+
+const nanCam = G.camera({ width: 800, height: 600 });
+nanCam.centre(100, 100);
+const beforeNaN = nanCam.view();
+nanCam.follow(NaN, 0, 1 / 60);
+ok("camera: a NaN target is ignored", nanCam.view().x === beforeNaN.x && nanCam.view().y === beforeNaN.y);
+
+const c60 = G.camera({ width: 800, height: 600, smooth: 0.2 });
+const c30 = G.camera({ width: 800, height: 600, smooth: 0.2 });
+for (let i = 0; i < 60; i++) c60.follow(1000, 300, 1 / 60);
+for (let i = 0; i < 30; i++) c30.follow(1000, 300, 1 / 30);
+ok("camera: smoothing is the same at 60 fps and at 30 fps",
+   Math.abs(c60.view().x - c30.view().x) < 1.5);
+
+// ---- v1.10: sprite animation ------------------------------------------------
+let ended = 0, stepEvents = 0;
+const anim = G.anim({
+  clips: {
+    walk: { frames: ["w0", "w1", "w2"], fps: 10, loop: true },
+    die: { frames: ["d0", "d1"], fps: 10, loop: "once", onEnd: () => ended++ },
+    idle: { frames: ["i0"], fps: 0 },
+    pat: { frames: ["p0", "p1", "p2"], fps: 10, loop: "pingpong" },
+    foot: { frames: ["f0", "f1", "f2"], fps: 10, loop: true, events: { 1: "step" }, onEvent: () => stepEvents++ }
+  }
+});
+anim.play("walk");
+ok("anim: frame 0 at time 0", anim.frame() === "w0");
+anim.update(0.15);
+ok("anim: 10 fps advances one frame per 0.1 s", anim.frame() === "w1");
+anim.update(0.1);
+anim.update(0.1);
+ok("anim: a looping clip wraps to the first frame", anim.frame() === "w0");
+ok("anim: replaying the clip you are in keeps the phase",
+   (anim.play("walk"), anim.frame() === "w0" && anim.time() > 0.3));
+anim.play("walk", { restart: true });
+ok("anim: restart:true rewinds", anim.time() === 0 && anim.frame() === "w0");
+
+anim.play("die");
+anim.update(0.1);
+ok("anim: a once clip is not done at its first frame", anim.done() === false && anim.frame() === "d1");
+anim.update(0.5);
+ok("anim: a once clip holds its last frame", anim.frame() === "d1" && anim.done() === true);
+ok("anim: onEnd fires exactly once", ended === 1);
+anim.update(1);
+ok("anim: a finished clip does not fire again", ended === 1);
+
+anim.play("idle");
+anim.update(0.5);
+ok("anim: fps 0 freezes instead of dividing by zero", anim.frame() === "i0");
+
+anim.play("pat");
+const patSeq = [];
+for (let i = 0; i < 4; i++) { patSeq.push(anim.frame()); anim.update(0.1); }
+ok("anim: pingpong runs 0,1,2,1", patSeq.join(",") === "p0,p1,p2,p1");
+
+anim.play("foot");
+let seen = 0;
+for (let i = 0; i < 30; i++) { anim.update(1 / 60); if (anim.frame() === "f1") seen++; }
+ok("anim: an event fires on entry, not once per update", stepEvents > 0 && stepEvents < seen);
+
+anim.play("walk");
+const t0 = anim.time();
+anim.update(-1);
+ok("anim: a negative dt is ignored", anim.time() === t0);
+
+// ---- v1.10: A* --------------------------------------------------------------
+const open = G.astar({ width: 10, height: 10, blocked: () => false });
+const straight = open.find(0, 0, 5, 0);
+ok("astar: an open grid gives the straight path", straight.path.length === 5 && straight.cost === 5);
+ok("astar: the path starts next to the agent and ends on the goal",
+   straight.path[0].x === 1 && straight.path[4].x === 5);
+
+const walled = G.astar({ width: 10, height: 10, blocked: (x, z) => x === 2 && z !== 9 });
+const around = walled.find(0, 0, 4, 0);
+ok("astar: a wall is walked around, never through",
+   around && around.path.every((c) => !(c.x === 2 && c.z !== 9)) && around.cost > 4);
+
+const sealed = G.astar({ width: 10, height: 10, blocked: (x) => x === 2 });
+ok("astar: an unreachable goal is null, not an empty path", sealed.find(0, 0, 4, 0) === null);
+ok("astar: a goal inside a wall is null", open.find(0, 0, 4, 4) !== null &&
+   G.astar({ width: 5, height: 5, blocked: (x, z) => x === 4 && z === 4 }).find(0, 0, 4, 4) === null);
+
+const corner = G.astar({ width: 3, height: 3, diagonal: true, blocked: (x, z) => (x === 1 && z === 0) || (x === 0 && z === 1) });
+ok("astar: a diagonal move may not cut a corner between two walls", corner.find(0, 0, 1, 1) === null);
+
+const diag = G.astar({ width: 5, height: 5, diagonal: true, blocked: () => false });
+const dg = diag.find(0, 0, 2, 2);
+ok("astar: a diagonal step costs sqrt(2)", dg.path.length === 2 && Math.abs(dg.cost - 2 * Math.SQRT2) < 1e-9);
+
+ok("astar: the agent is already there", open.find(3, 3, 3, 3).path.length === 0);
+ok("astar: a start off the grid is null", open.find(-1, 0, 3, 3) === null);
+
+const tight = G.astar({ width: 30, height: 30, budget: 5 });
+ok("astar: the node budget stops a hopeless search", tight.find(0, 0, 29, 29) === null && tight.stats().exhausted === true);
+
+const d1 = JSON.stringify(open.find(0, 0, 7, 7).path);
+const d2 = JSON.stringify(open.find(0, 0, 7, 7).path);
+ok("astar: the same query gives the same path", d1 === d2);
+
+// ---- v1.10: particles -------------------------------------------------------
+const px = G.particles({ cap: 10, seed: 3, gravity: 100 });
+ok("particles: a burst spawns the count asked for", px.burst({ x: 5, y: 5, count: 4, life: 1, speed: 0 }) === 4 && px.count() === 4);
+px.update(0.5);
+let firstY = 0;
+px.each((p) => { firstY = p.y; });
+ok("particles: gravity pulls them down", firstY > 5);
+px.update(1);
+ok("particles: a particle dies at the end of its life", px.count() === 0);
+
+const capped = G.particles({ cap: 5, seed: 1 });
+capped.burst({ x: 0, y: 0, count: 20, life: 10, speed: 0 });
+ok("particles: the cap holds and the oldest is recycled", capped.count() === 5 && capped.stats().recycled > 0);
+
+const partA = G.particles({ seed: 12 }), partB = G.particles({ seed: 12 });
+partA.burst({ x: 0, y: 0, count: 1, life: 1, speed: [10, 90], angle: 0, spread: 1 });
+partB.burst({ x: 0, y: 0, count: 1, life: 1, speed: [10, 90], angle: 0, spread: 1 });
+let avx = 0, bvx = 0;
+partA.each((p) => { avx = p.vx; });
+partB.each((p) => { bvx = p.vx; });
+ok("particles: the same seed throws the same sparks", avx === bvx);
+
+const dead = G.particles({ seed: 1 });
+ok("particles: a zero-life particle is never born", dead.burst({ x: 0, y: 0, count: 3, life: 0 }) === 0 && dead.count() === 0);
+
+const born = G.particles({ seed: 2 });
+born.burst({ x: 40, y: 50, count: 1, life: 1, speed: 0 });
+let bornAt = null;
+born.each((p) => { bornAt = { x: p.x, y: p.y }; });
+ok("particles: a particle is born where it was thrown", bornAt.x === 40 && bornAt.y === 50);
+
+const cleared = G.particles({ seed: 2 });
+cleared.burst({ x: 0, y: 0, count: 3, life: 5 });
+cleared.clear();
+ok("particles: clear empties the emitter", cleared.count() === 0);
+
+// ---- v1.10: replay ----------------------------------------------------------
+const rec = G.replay({ seed: 42, step: 1 / 60 });
+rec.frame(["left"]); rec.frame(["left"]); rec.frame([]);
+const tape = rec.export();
+ok("replay: identical frames collapse into runs", tape.runs.length === 2 && tape.count === 3);
+ok("replay: the step and the seed travel with the tape", tape.step === 1 / 60 && tape.seed === 42);
+
+const pbk = G.replay.load(tape);
+ok("replay: a tape loads", pbk.ok === true && pbk.length === 3);
+ok("replay: playback returns the frames in order",
+   JSON.stringify(pbk.next()) === '["left"]' && JSON.stringify(pbk.next()) === '["left"]' && JSON.stringify(pbk.next()) === '[]');
+ok("replay: past the end is null", pbk.next() === null);
+pbk.reset();
+ok("replay: reset rewinds to the start", pbk.index() === 0 && JSON.stringify(pbk.next()) === '["left"]');
+ok("replay: a tape from another step is refused", pbk.matches({ step: 1 / 30 }) === false && pbk.matches({ step: 1 / 60 }) === true);
+
+const live = ["a"];
+const rec2 = G.replay({ seed: 1 });
+rec2.frame(live);
+live.push("b");
+const tape2 = rec2.export();
+ok("replay: the recorded frame is a copy, not a reference", JSON.parse(tape2.runs[0][0]).length === 1);
+
+const rec3 = G.replay({ seed: 5 });
+rec3.frame(1); rec3.frame(2); rec3.frame(3);
+rec3.checkpoint("h-abc");
+const pb3 = G.replay.load(rec3.export());
+ok("replay: a checkpoint verifies", pb3.verify(3, "h-abc") === true && pb3.verify(3, "other") === false);
+ok("replay: a frame with no checkpoint is unknown", pb3.verify(1, "h-abc") === null);
+
+ok("replay: a foreign file is refused", G.replay.load(null).ok === false && G.replay.load({ format: "other" }).ok === false);
+ok("replay: a truncated tape is refused",
+   G.replay.load({ format: "game-kit.replay", version: 1, step: 1 / 60, seed: 1, count: 9, runs: [["1", 2]] }).ok === false);
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 if (fail) process.exit(1);
