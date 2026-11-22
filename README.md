@@ -32,6 +32,7 @@ engine every small browser game was re-implementing, extracted once from
 - **object pooling** *(v1.9)* — `Game.pool`: bullets, particles and corpses that are created and destroyed thousands of times a minute. A hard `cap`, reuse before allocation, and `stats()` so you size the pool from evidence.
 - **a minimap** *(v1.9)* — `Game.minimap`: the floor plan prerendered once into an offscreen canvas, then a blit plus your markers. A minimap that redraws every wall every frame costs more than the game.
 - **generative music** *(v1.9)* — `Game.audio.gen`: a minor pentatonic, a tempo and a rule for the next note, with an intensity your game feeds in. The sequencer plays what you wrote; this writes it.
+- **hit feedback** *(v1.13)* — `Game.feel`: a punch that starts at its peak, a **seeded** shake, a flash that falls instead of ramping up, and hit-stop counted in **whole frames** of your step — with two hits in one frame taking the longest stop, never the sum.
 - **a camera** *(v1.10)* — `Game.camera`: follow with a **dead zone**, clamp to the level (a world smaller than the view is centred, not clamped), a shake that is an **offset and never written into the position**, and `toScreen`/`toWorld` that include the shake so picking matches what was drawn.
 - **sprite animation** *(v1.10)* — `Game.anim`: clips over atlas frame names with `loop` / `once` / `pingpong`, per-frame **events** (a footstep on frame 3), `done()` that holds the last frame, and `fps: 0` that freezes instead of dividing by zero.
 - **A\* pathfinding** *(v1.10)* — `Game.astar`: an arbitrary target, no **corner cutting** between two walls, a deterministic tie-break so a replay re-paths identically, and a **node budget** so a hopeless search cannot eat the frame. `null`, never `[]`, when there is no route.
@@ -224,6 +225,38 @@ The kit absorbed the engine patterns every small browser game rebuilds:
 
 Every addition is reimplemented from the idea, not copied.
 
+## Hit feedback *(v1.13)*
+
+A game does not transition, it reacts — and every one of these is a pure function of
+elapsed milliseconds, so it is the same at 30 fps and at 144 fps, and identical in a
+replay.
+
+```js
+const F = Game.feel;
+
+const scale = F.punch(t, { amount: 0.15, duration: 180 });   // 1.15 at t=0, home at 180
+const off   = F.shake(t, { amplitude: 6, duration: 220, seed: 7 });
+const white = F.flash(t, { duration: 120 });                  // 1 at the hit, 0 when it is over
+const frames = F.hitstop(80, { step: 1 / 60 });               // 5 — freeze the sim for five steps
+
+F.hitstop.combine(80, 60, 120);                               // 120, not 260
+F.reduced(matchMedia("(prefers-reduced-motion: reduce)").matches);
+```
+
+- **The impact is the first frame.** A punch that eases in from 1 spends its most
+  important frame doing nothing.
+- **The shake is seeded.** `Math.random()` in a screen shake is a replay that does not
+  look like the run it recorded.
+- **Hit-stop is whole frames, never zero.** A stop shorter than a frame is a stop that
+  did not happen, which reads as "the hit did not connect".
+- **Two hits do not add up.** Three simultaneous 80 ms stops are 80 ms, not 240.
+- **Reduced motion neutralises the punch, the shake and the flash** — the kit has no DOM,
+  so the app reads the media query and calls `F.reduced(...)`. Hit-stop stays: a freeze
+  is not motion.
+
+`Game.camera`'s shake is this same curve, so there is one seed rule in the kit rather
+than two.
+
 ## LDtk levels *(v1.12)*
 
 Tiled has a sibling, and a 2D game is as likely to meet it: LDtk stores levels as plain
@@ -334,7 +367,7 @@ why CC-BY-SA and GPL art do not go into a kit under PolyForm Noncommercial.
 
 ```
 node test-node.js
-334 passed, 0 failed
+352 passed, 0 failed
 ```
 
 Covers the loop's step counts, the `maxFrame` clamp, sub-step frames, scenes,
@@ -351,7 +384,10 @@ A\* (a wall walked around, a sealed goal, no corner cutting, the node budget, th
 same path twice), particles (gravity, life, the cap, the same seed) and replays
 (collapse, copy, step mismatch, checkpoints, a truncated tape), and the LDtk reader
 (layer order, an IntGrid's row-major cells and empty `0`, a layer offset, flip bits,
-auto-layer tiles, entity fields, a separately saved level, and a tile index to rectangle).
+auto-layer tiles, entity fields, a separately saved level, and a tile index to rectangle),
+and the hit feedback (a punch at its peak and home again, a seeded shake inside its
+amplitude, a flash that falls, hit-stop in whole frames and never the sum, reduced
+motion, and the camera shaking with the same curve).
 
 ## Games built with game-kit
 

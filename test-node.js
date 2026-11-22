@@ -1122,6 +1122,52 @@ let ldtkThrew = false;
 try { G.ldtk.parse({ levels: "no" }); } catch (e) { ldtkThrew = true; }
 ok("ldtk: a file that is not a project is refused", ldtkThrew);
 
+// ---- v1.13: feel ------------------------------------------------------------
+const F = G.feel;
+ok("feel: a punch starts at its peak, not at 1", Math.abs(F.punch(0, { amount: 0.2 }) - 1.2) < 1e-9);
+ok("feel: a punch is home at the end of its duration", F.punch(180) === 1 && F.punch(5000) === 1);
+ok("feel: a punch overshoots below 1 before it settles", (() => {
+  let under = false;
+  for (let ms = 0; ms <= 180; ms += 2) if (F.punch(ms, { amount: 0.2 }) < 1) under = true;
+  return under;
+})());
+ok("feel: a zero-duration punch is neutral, not NaN", F.punch(0, { duration: 0 }) === 1);
+
+const fs1 = F.shake(0, { seed: 3 }), fs2 = F.shake(0, { seed: 3 }), fs3 = F.shake(0, { seed: 4 });
+ok("feel: a shake is the same from the same seed", fs1.x === fs2.x && fs1.y === fs2.y);
+ok("feel: a shake differs from another seed", fs1.x !== fs3.x || fs1.y !== fs3.y);
+ok("feel: a shake stays inside its amplitude", (() => {
+  for (let ms = 0; ms < 220; ms += 3) {
+    const o = F.shake(ms, { amplitude: 5, seed: 9 });
+    if (Math.abs(o.x) > 5 || Math.abs(o.y) > 5) return false;
+  }
+  return true;
+})());
+ok("feel: a shake is over at its duration", (() => { const o = F.shake(400); return o.x === 0 && o.y === 0; })());
+ok("feel: a one-axis shake leaves the other axis at zero", F.shake(10, { axis: "x", seed: 2 }).y === 0);
+
+ok("feel: a flash is full at the hit and gone after", F.flash(0) === 1 && F.flash(200) === 0);
+ok("feel: a flash falls, it does not ramp up", F.flash(60) > F.flash(90) && F.flash(60) < 1);
+
+ok("feel: hit-stop is whole frames of the game step", F.hitstop(80, { step: 1000 / 60 }) === 5);
+ok("feel: a hit-stop shorter than a frame is still one frame", F.hitstop(2, { step: 16.67 }) === 1);
+ok("feel: no hit-stop is zero frames", F.hitstop(0) === 0);
+ok("feel: two hits in one frame take the longest stop, not the sum", F.hitstop.combine(80, 60, 120) === 120);
+
+F.reduced(true);
+ok("feel: reduced motion neutralises the punch, the shake and the flash",
+   F.punch(0) === 1 && F.shake(0).x === 0 && F.flash(0) === 0);
+ok("feel: reduced motion keeps the hit-stop, which is not motion", F.hitstop(80) === 5);
+F.reduced(false);
+
+// the camera's shake is the same curve, so one seed rule covers both
+const camFeel = G.camera({ width: 800, height: 600, seed: 5 });
+camFeel.shake(8, 0.2);
+camFeel.update(1 / 60);
+const camOff = camFeel.offset();
+const feelOff = F.shake(1000 / 60, { amplitude: 8, duration: 200, seed: 5 });
+ok("feel: the camera shakes with the same curve", camOff.x === feelOff.x && camOff.y === feelOff.y);
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 if (fail) process.exit(1);

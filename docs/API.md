@@ -1,6 +1,6 @@
 # game-kit — API reference
 
-**Version 1.12.0.** **The shared game core for drsamonline apps.** Zero dependencies. The common engine every small browser game was re-implementing, extracted once from `neon-engine` and `Aethelgard-Engine`.
+**Version 1.13.0.** **The shared game core for drsamonline apps.** Zero dependencies. The common engine every small browser game was re-implementing, extracted once from `neon-engine` and `Aethelgard-Engine`.
 
 Generated from the source in this repository: every name, argument and
 note below is read out of the kit file, so it cannot describe a function
@@ -12,7 +12,7 @@ Kit.clamp(...)
 // or: const Kit = require('./game-kit.js')
 ```
 
-## The surface (46 entries)
+## The surface (47 entries)
 
 | Name | Arguments | What it does |
 |---|---|---|
@@ -53,6 +53,7 @@ Kit.clamp(...)
 | `Kit.minimap` | `(canvas, opts)` | floor plan prerendered once, then a blit plus your markers |
 | `Kit.audio.gen` | `(opts)` | generative music: scale, tempo, `setIntensity`, `drain()` |
 | `Kit.audio.genScale` | `(octaves)` | the minor pentatonic the generator walks |
+| `Kit.feel` | `()` | hit feedback: `punch`, seeded `shake`, `flash`, `hitstop` in whole frames, `reduced(bool)` |
 | `Kit.camera` | `(opts)` | follow with a dead zone, clamp to the level, a shake that is an offset — `toScreen`/`toWorld` include it |
 | `Kit.anim` | `(opts)` | clip player over atlas frames: `loop`/`once`/`pingpong`, per-frame events, `done()` holds the last frame |
 | `Kit.astar` | `(opts)` | A* to an arbitrary target: no corner cutting, deterministic tie-break, node `budget`, `null` when unreachable |

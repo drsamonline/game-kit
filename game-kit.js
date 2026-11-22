@@ -8,7 +8,7 @@
  */
 (function (root) {
   "use strict";
-  var G = { version: "1.12.0" };
+  var G = { version: "1.13.0" };
 
   /* ---------- maths ---------- */
   G.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -1832,6 +1832,102 @@
     };
   })();
 
+  /* ---------- feel (v1.13) ----------
+     The half-second after a hit. A game does not transition; it reacts, and every
+     one of these is a pure function of elapsed milliseconds — the same at 30 fps and
+     at 144 fps, and identical in a replay.
+
+     Four rules, each one a hit that felt wrong:
+
+     1. THE IMPACT IS THE FIRST FRAME. A punch that eases in from 1 spends its most
+        important frame doing nothing. `punch(0)` is the peak and the decay is the
+        animation; a flash starts at 1 and falls, it does not ramp up.
+     2. A SHAKE IS SEEDED. `Math.random()` in a screen shake means the replay of a run
+        does not look like the run, and two hits in one frame fight over one offset.
+     3. HIT-STOP IS COUNTED IN WHOLE FRAMES of the game's own step, and it is never
+        zero: a stop shorter than a frame is a stop that did not happen, which reads as
+        "the hit did not connect".
+     4. TWO HITS IN ONE FRAME DO NOT ADD UP. Three simultaneous hits that each stop for
+        80 ms must not freeze the game for a quarter of a second — the stop is the
+        longest of them, not the sum.
+
+     And all of it goes neutral under reduced motion — but the kit does not read the
+     media query itself, because it has no DOM. The app wires it:
+     `Game.feel.reduced(matchMedia("(prefers-reduced-motion: reduce)").matches)`.
+     Hit-stop stays even then: a freeze is not motion. */
+  G.feel = (function () {
+    var isReduced = false;
+
+    /* Scale multiplier around a point: 1 is neutral, the peak is 1 + amount. */
+    function punch(ms, opts) {
+      var o = opts || {};
+      var amount = o.amount == null ? 0.12 : o.amount;
+      var dur = o.duration == null ? 180 : o.duration;
+      if (isReduced || !(dur > 0)) return 1;
+      var p = Math.max(0, ms) / dur;
+      if (p >= 1) return 1;
+      /* an under-damped ring: one overshoot below 1, then home */
+      return 1 + amount * Math.exp(-4 * p) * Math.cos(Math.PI * 3 * p);
+    }
+
+    /* A deterministic offset in pixels. Same seed, same shake, every run. */
+    function shake(ms, opts) {
+      var o = opts || {};
+      var amp = o.amplitude == null ? 6 : o.amplitude;
+      var dur = o.duration == null ? 220 : o.duration;
+      var seed = o.seed == null ? 1 : o.seed;
+      var rate = o.rate == null ? 60 : o.rate;      // new offset per second
+      if (isReduced || !(dur > 0)) return { x: 0, y: 0 };
+      var p = Math.max(0, ms) / dur;
+      if (p >= 1) return { x: 0, y: 0 };
+      var i = Math.floor((Math.max(0, ms) / 1000) * rate);
+      function noise(n) {
+        var v = Math.sin((seed * 127.1 + n * 311.7) % 1000) * 43758.5453;
+        return (v - Math.floor(v)) * 2 - 1;
+      }
+      var decay = (1 - p) * (1 - p);
+      return {
+        x: amp * decay * noise(i * 2),
+        y: o.axis === "x" ? 0 : amp * decay * noise(i * 2 + 1)
+      };
+    }
+
+    /* A white flash: 1 at the hit, 0 when it is over. Not a fade-in. */
+    function flash(ms, opts) {
+      var o = opts || {};
+      var dur = o.duration == null ? 120 : o.duration;
+      if (isReduced || !(dur > 0)) return 0;
+      var p = Math.max(0, ms) / dur;
+      if (p >= 1) return 0;
+      var d = 1 - p;
+      return d * d;
+    }
+
+    /* Whole frames to freeze the simulation, at the game's own step. */
+    function hitstop(ms, opts) {
+      var o = opts || {};
+      var step = o.step == null ? 1000 / 60 : o.step;
+      if (!(ms > 0)) return 0;
+      if (!(step > 0)) return 1;
+      return Math.max(1, Math.ceil(ms / step));
+    }
+    /* Two hits in one frame: the longest, never the sum. */
+    hitstop.combine = function () {
+      var best = 0;
+      for (var i = 0; i < arguments.length; i++) if (arguments[i] > best) best = arguments[i];
+      return best;
+    };
+
+    return {
+      punch: punch,
+      shake: shake,
+      flash: flash,
+      hitstop: hitstop,
+      /** Wire this to the media query; the kit has no DOM to read it with. */
+      reduced: function (v) { if (v != null) isReduced = !!v; return isReduced; }
+    };
+  })();
+
   /* ---------- camera (v1.10) ----------
      A view onto a world bigger than the screen: follow a target, hold it inside
      a dead zone, refuse to show the void past the level's edge, and shake
@@ -1865,8 +1961,8 @@
     var bounds = opts.bounds || null;                   // { x, y, w, h } or null
     var dead = opts.deadzone || null;                   // { x, y, w, h } in view space
     var smooth = opts.smooth == null ? 1 : opts.smooth; // 1 = locked on, 0 = never moves
-    var shakeAmp = 0, shakeLeft = 0, shakeLen = 0;
-    var shakeRng = G.rng(opts.seed == null ? 1 : opts.seed);
+    var shakeAmp = 0, shakeDur = 0, shakeMs = 0;
+    var shakeSeed = opts.seed == null ? 1 : opts.seed;
     var ox = 0, oy = 0;
 
     function span(v, size, lo, hi) {
@@ -1920,19 +2016,22 @@
       shake: function (amp, seconds) {
         if (!(amp > 0) || !(seconds > 0)) return api;
         shakeAmp = amp;
-        shakeLen = shakeLeft = seconds;
+        shakeDur = seconds;
+        shakeMs = 0;
         return api;
       },
       /* Advance the shake clock. The offset is a pure function of the seed and
          the remaining time, so a replay shakes identically. */
       update: function (dt) {
         if (!(dt > 0)) return api;
-        if (shakeLeft > 0) {
-          shakeLeft -= dt;
-          if (shakeLeft <= 0) { shakeLeft = 0; ox = 0; oy = 0; return api; }
-          var f = shakeLeft / shakeLen;                    // linear falloff
-          ox = (shakeRng() * 2 - 1) * shakeAmp * f;
-          oy = (shakeRng() * 2 - 1) * shakeAmp * f;
+        if (shakeDur > 0) {
+          shakeMs += dt * 1000;
+          if (shakeMs >= shakeDur * 1000) { shakeDur = 0; shakeMs = 0; ox = 0; oy = 0; return api; }
+          /* the curve lives in Game.feel, so the camera's shake and every other
+             shake in the game are the same shape and the same seed rule */
+          var o = G.feel.shake(shakeMs, { amplitude: shakeAmp, duration: shakeDur * 1000, seed: shakeSeed });
+          ox = o.x;
+          oy = o.y;
         }
         return api;
       },
@@ -1953,7 +2052,7 @@
         return box.x + box.w >= x - m && box.x <= x + vw + m &&
                box.y + box.h >= y - m && box.y <= y + vh + m;
       },
-      isShaking: function () { return shakeLeft > 0; }
+      isShaking: function () { return shakeDur > 0; }
     };
     applyBounds();
     return api;

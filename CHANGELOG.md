@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.13.0 — 2026-11-22
+
+**`Game.feel`** — the half-second after a hit, as pure functions of elapsed
+milliseconds: `punch`, `shake`, `flash`, `hitstop`. Drafted for motion-kit in an earlier
+pass and not shipped, because that kit is frozen into tokens-kit as `T.motion.*` and
+adding to it would re-create the drift the merge ended. It belongs here anyway: a hit is
+a game concept, not a design token.
+
+| Rule | Why |
+| --- | --- |
+| The impact is the first frame | A punch that eases in from 1 spends its most important frame doing nothing; a flash starts at 1 and falls, it does not ramp up |
+| The shake is seeded | `Math.random()` in a screen shake is a replay that does not look like the run it recorded |
+| Hit-stop is whole frames, and never zero | A stop shorter than a frame is a stop that did not happen, which reads as "the hit did not connect" |
+| Two hits do not add up | Three simultaneous 80 ms stops are 80 ms, not 240 — `hitstop.combine` takes the longest |
+| Reduced motion neutralises punch, shake and flash | The kit has no DOM, so the app reads the media query and calls `feel.reduced(v)`. Hit-stop stays: a freeze is not motion |
+
+**`Game.camera` now shakes with `Game.feel.shake`.** One curve, one seed rule, one place
+to fix it — the camera keeps its `shake(amp, seconds)` API and its own state, but the
+offset comes from `feel`. The 1.10 camera tests pass unchanged.
+
+**Tests** — 18 new assertions, 352 total.
+
+
 ## 1.12.0 — 2026-11-22
 
 **`Game.ldtk`** — the reader for the other 2D level editor. `Game.tiled` has parsed Tiled
